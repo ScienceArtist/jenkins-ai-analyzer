@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jenkins Log Analyzer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 20px; padding: 40px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+        h1 { color: #333; margin-bottom: 10px; text-align: center; font-size: 2.5em; }
+        .subtitle { text-align: center; color: #666; margin-bottom: 30px; }
+        .step { margin-bottom: 25px; padding: 20px; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #667eea; }
+        .step h2 { color: #667eea; margin-bottom: 15px; font-size: 1.2em; }
+        input, select, button { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; }
+        input:focus, select:focus { outline: none; border-color: #667eea; }
+        button { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; cursor: pointer; font-weight: bold; transition: transform 0.2s; }
+        button:hover { transform: translateY(-2px); }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .progress-section { display: none; margin-top: 30px; padding: 20px; background: #f0f4ff; border-radius: 10px; }
+        .progress-section.active { display: block; }
+        .progress-bar { width: 100%; height: 30px; background: #e0e0e0; border-radius: 15px; overflow: hidden; margin: 15px 0; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; }
+        .status-message { color: #667eea; font-weight: bold; margin: 10px 0; padding: 10px; background: white; border-radius: 5px; }
+        .results-section { display: none; margin-top: 30px; }
+        .results-section.active { display: block; }
+        .job-card { background: white; border: 2px solid #e0e0e0; border-radius: 10px; margin-bottom: 20px; overflow: hidden; transition: all 0.3s; }
+        .job-card:hover { border-color: #667eea; box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2); }
+        .job-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .job-title { font-size: 1.3em; font-weight: bold; }
+        .job-meta { display: flex; gap: 15px; font-size: 0.9em; }
+        .job-badge { background: rgba(255,255,255,0.2); padding: 5px 12px; border-radius: 15px; }
+        .job-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+        .job-content.expanded { max-height: 5000px; }
+        .job-body { padding: 25px; background: #f8f9fa; white-space: pre-wrap; line-height: 1.8; color: #333; font-size: 0.95em; }
+        .expand-icon { transition: transform 0.3s; }
+        .expanded .expand-icon { transform: rotate(180deg); }
+        .summary-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .stat-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; text-align: center; }
+        .stat-value { font-size: 2.5em; font-weight: bold; }
+        .stat-label { font-size: 0.9em; opacity: 0.9; margin-top: 5px; }
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }
+        .modal-content { background: white; margin: 5% auto; padding: 30px; border-radius: 15px; max-width: 600px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+        .modal-header { color: #667eea; font-size: 1.5em; margin-bottom: 20px; }
+        .modal-body { line-height: 1.8; color: #333; }
+        .modal-body strong { color: #667eea; }
+        .modal-body a { color: #667eea; text-decoration: none; font-weight: bold; }
+        .modal-body a:hover { text-decoration: underline; }
+        .close-btn { float: right; font-size: 28px; font-weight: bold; color: #aaa; cursor: pointer; }
+        .close-btn:hover { color: #000; }
+        .footer { margin-top: 40px; padding: 20px; text-align: center; color: #666; border-top: 2px solid #f0f0f0; }
+        .footer a { color: #667eea; text-decoration: none; }
+        .export-buttons { display: none; margin-top: 20px; gap: 10px; }
+        .export-buttons.active { display: flex; }
+        .export-btn { flex: 1; padding: 12px; background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        .export-btn:hover { transform: translateY(-2px); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Jenkins Log Analyzer</h1>
+        <p class="subtitle">AI-powered analysis with real-time streaming results</p>
+        
+        <div class="step">
+            <h2>Step 1: Enter Groq API Key</h2>
+            <input type="password" id="groqApiKey" placeholder="Enter your Groq API key">
+            <button onclick="fetchModels()">Fetch Available Models</button>
+            <small style="color: #dc3545; margin-top: 10px; display: block;">⚠️ <a href="#" onclick="showDataProtectionModal(); return false;" style="color: #dc3545; text-decoration: underline;">Important: Enable Zero Data Retention in Groq</a></small>
+        </div>
+        
+        <div class="step">
+            <h2>Step 2: Select Model</h2>
+            <select id="modelSelect" disabled>
+                <option value="">First fetch models...</option>
+            </select>
+        </div>
+        
+        <div class="step">
+            <h2>Step 3: Enter Jenkins URL</h2>
+            <input type="text" id="jenkinsUrl" placeholder="https://your-jenkins-server.com or https://jenkins.com/job/JobName/">
+            <small style="color: #666;">💡 Tip: Use base URL to analyze all jobs, or job-specific URL for single job</small>
+        </div>
+        
+        <div class="step">
+            <h2>Step 4: Analyze Logs</h2>
+            <button id="analyzeBtn" onclick="analyzeLogs()">Start Analysis</button>
+        </div>
+        
+        <div id="progressSection" class="progress-section">
+            <h3 style="color: #667eea; margin-bottom: 15px;">Analysis Progress</h3>
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill" style="width: 0%">0%</div>
+            </div>
+            <div id="statusMessage" class="status-message">Initializing...</div>
+        </div>
+        
+        <div id="resultsSection" class="results-section">
+            <h2 style="color: #667eea; margin-bottom: 20px;">📊 Analysis Results</h2>
+            <div id="pipelineInfo" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: center;">
+                <h3 id="pipelineName" style="font-size: 1.5em; margin-bottom: 10px;"></h3>
+                <p id="pipelineDesc"></p>
+            </div>
+            <div id="summaryStats" class="summary-stats"></div>
+            <div id="jobResults"></div>
+	            <div class="export-buttons" id="exportButtons">
+	                <button class="export-btn" onclick="exportAsJSON()">📥 Export as JSON</button>
+	                <button class="export-btn" onclick="exportAsXML()">🧾 Export as XML</button>
+	            </div>
+        </div>
+
+	        <div class="footer">
+	            <p>Created by <strong>Chandravijay Agrawal</strong> | <a href="https://github.com/ScienceArtist" target="_blank">@ScienceArtist</a></p>
+            <p style="margin-top: 10px; font-size: 0.9em;">AI-powered Jenkins Log Analyzer with real-time streaming</p>
+        </div>
+    </div>
+
+    <!-- Data Protection Modal -->
+    <div id="dataProtectionModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" onclick="closeDataProtectionModal()">&times;</span>
+            <div class="modal-header">🔒 Important: Enable Zero Data Retention</div>
+            <div class="modal-body">
+                <p><strong>To protect your Jenkins logs and data, you MUST enable Zero Data Retention (ZDR) in Groq:</strong></p>
+                <ol style="margin: 15px 0; padding-left: 20px;">
+                    <li>Visit <a href="https://console.groq.com/settings/data-controls" target="_blank">Groq Data Controls Settings</a></li>
+                    <li>Enable <strong>"Global ZDR"</strong> - This prevents Groq from storing any input/output data</li>
+                    <li>Enable <strong>"Inference APIs ZDR"</strong> - This opts out of storing API data for 30 days</li>
+                </ol>
+                <p style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 15px;">
+                    <strong>⚠️ Why this matters:</strong> Without ZDR enabled, your Jenkins logs (which may contain sensitive information) could be stored by Groq for up to 30 days. Enabling ZDR ensures complete data privacy.
+                </p>
+                <button onclick="closeDataProtectionModal()" style="margin-top: 20px; width: 100%; padding: 12px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold;">Got it!</button>
+            </div>
+        </div>
+    </div>
+
+	    <script>
+        let jobCount = 0, analyzedCount = 0;
+        let analysisResults = [];
+
+        function showDataProtectionModal() {
+            document.getElementById('dataProtectionModal').style.display = 'block';
+        }
+
+        function closeDataProtectionModal() {
+            document.getElementById('dataProtectionModal').style.display = 'none';
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('dataProtectionModal');
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // Check for automation query parameters on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const groqApiKey = urlParams.get('groq_api_key');
+            const model = urlParams.get('model');
+            const jenkinsUrl = urlParams.get('jenkins_url');
+
+            if (groqApiKey && model && jenkinsUrl) {
+                // Auto-fill form fields
+                document.getElementById('groqApiKey').value = groqApiKey;
+                document.getElementById('jenkinsUrl').value = jenkinsUrl;
+
+                // Trigger async analysis for automation
+                triggerAsyncAnalysis(groqApiKey, model, jenkinsUrl);
+            }
+        });
+
+        async function triggerAsyncAnalysis(apiKey, model, jenkinsUrl) {
+            try {
+                document.getElementById('statusMessage').textContent = 'Starting async analysis...';
+                document.getElementById('progressSection').classList.add('active');
+
+                const res = await fetch('/api/analyze-async', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        jenkins_url: jenkinsUrl,
+                        groq_api_key: apiKey,
+                        model: model
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+
+                // Display tracking information
+                const trackingInfo = document.createElement('div');
+                trackingInfo.style.cssText = 'background: #e7f3ff; border: 2px solid #2196F3; padding: 20px; border-radius: 10px; margin: 20px 0;';
+                trackingInfo.innerHTML = `
+                    <h3 style="color: #1976D2; margin-top: 0;">🔗 Async Analysis Started</h3>
+                    <p><strong>Tracking ID:</strong> <code style="background: white; padding: 4px 8px; border-radius: 4px;">${data.tracking_id}</code></p>
+                    <p><strong>Status URL:</strong> <a href="${data.status_url}" target="_blank" style="color: #1976D2; word-break: break-all;">${data.status_url}</a></p>
+                    <p style="margin-bottom: 0;"><strong>Status:</strong> <span style="color: #ff9800; font-weight: bold;">${data.status}</span></p>
+                    <button onclick="pollAsyncStatus('${data.tracking_id}')" style="margin-top: 15px; padding: 10px 20px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">📊 Poll Status & Show Results</button>
+                `;
+
+                document.getElementById('resultsSection').classList.add('active');
+                document.getElementById('resultsSection').insertBefore(trackingInfo, document.getElementById('summaryStats'));
+
+            } catch (e) {
+                alert('Error starting async analysis: ' + e.message);
+            }
+        }
+
+        async function pollAsyncStatus(trackingId) {
+            try {
+                document.getElementById('statusMessage').textContent = 'Polling analysis status...';
+
+                const res = await fetch(`/api/status/${trackingId}`);
+                const data = await res.json();
+
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+
+                document.getElementById('statusMessage').textContent = `Status: ${data.status}`;
+
+                if (data.status === 'complete' && data.results) {
+                    // Display results
+                    analysisResults = data.results;
+                    document.getElementById('jobResults').innerHTML = '';
+
+                    // Show pipeline info if available
+                    if (data.pipeline) {
+                        document.getElementById('pipelineInfo').style.display = 'block';
+                        document.getElementById('pipelineName').textContent = data.pipeline.name;
+                        document.getElementById('pipelineDesc').textContent = `Pipeline with ${data.pipeline.job_count} jobs`;
+                    }
+
+                    // Display each job result
+                    data.results.forEach(result => {
+                        const card = document.createElement('div');
+                        card.className = 'job-card';
+                        card.innerHTML = `
+                            <div class="job-header" onclick="this.nextElementSibling.classList.toggle('expanded')">
+                                <div class="job-title">${result.job}</div>
+                                <div class="job-meta">
+                                    <div class="job-badge">Build #${result.build}</div>
+                                    <div class="job-badge">${(result.log_size/1024).toFixed(1)}KB</div>
+                                    <div class="expand-icon">▼</div>
+                                </div>
+                            </div>
+                            <div class="job-content expanded">
+                                <div class="job-body">${result.analysis}</div>
+                            </div>
+                        `;
+                        document.getElementById('jobResults').appendChild(card);
+                    });
+
+                    updateStats();
+                    document.getElementById('exportButtons').classList.add('active');
+                    document.getElementById('statusMessage').textContent = '✅ Analysis complete!';
+
+                } else if (data.status === 'pending' || data.status === 'running') {
+                    document.getElementById('statusMessage').textContent = `Status: ${data.status} - Click "Poll Status" again to refresh`;
+                } else {
+                    document.getElementById('statusMessage').textContent = `Status: ${data.status}`;
+                }
+
+            } catch (e) {
+                alert('Error polling status: ' + e.message);
+            }
+        }
+        
+        async function fetchModels() {
+            const apiKey = document.getElementById('groqApiKey').value;
+            if (!apiKey) { alert('Enter API key'); return; }
+            try {
+                const res = await fetch('/api/models', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({groq_api_key: apiKey}) });
+                const data = await res.json();
+                if (data.error) { alert('Error: ' + data.error); return; }
+                const select = document.getElementById('modelSelect');
+                select.innerHTML = '<option value="">Select model...</option>';
+                data.models.forEach(m => { const opt = document.createElement('option'); opt.value = m.id; opt.textContent = m.name; select.appendChild(opt); });
+                select.disabled = false;
+                alert('✓ Models loaded!');
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+        
+        async function analyzeLogs() {
+            const apiKey = document.getElementById('groqApiKey').value;
+            const model = document.getElementById('modelSelect').value;
+            const jenkinsUrl = document.getElementById('jenkinsUrl').value;
+            if (!apiKey || !model || !jenkinsUrl) { alert('Complete all steps'); return; }
+            document.getElementById('analyzeBtn').disabled = true;
+            document.getElementById('progressSection').classList.add('active');
+            document.getElementById('resultsSection').classList.add('active');
+            document.getElementById('jobResults').innerHTML = '';
+            jobCount = 0; analyzedCount = 0;
+            analysisResults = []; // Reset results
+            document.getElementById('exportButtons').classList.remove('active');
+            try {
+                const res = await fetch('/api/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({jenkins_url: jenkinsUrl, groq_api_key: apiKey, model: model}) });
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = JSON.parse(line.substring(6));
+                            if (data.type === 'status') document.getElementById('statusMessage').textContent = data.message;
+                            else if (data.type === 'pipeline_info') {
+                                document.getElementById('pipelineInfo').style.display = 'block';
+                                document.getElementById('pipelineName').textContent = '🔗 Pipeline: ' + data.pipeline;
+                                document.getElementById('pipelineDesc').textContent = `Analyzing ${data.job_count} jobs in this pipeline`;
+                            }
+                            else if (data.type === 'progress') {
+                                jobCount = data.total; analyzedCount = data.current;
+                                const pct = Math.round((data.current / data.total) * 100);
+                                document.getElementById('progressFill').style.width = pct + '%';
+                                document.getElementById('progressFill').textContent = pct + '%';
+                                document.getElementById('statusMessage').textContent = `Analyzing ${data.job} (${data.current}/${data.total})`;
+                            }
+                            else if (data.type === 'job_result') {
+                                // Store result for export
+                                analysisResults.push({
+                                    job: data.job,
+                                    build: data.build,
+                                    analysis: data.analysis,
+                                    log_size: data.log_size,
+                                    timestamp: new Date().toISOString()
+                                });
+
+                                const card = document.createElement('div');
+                                card.className = 'job-card';
+                                card.innerHTML = `<div class="job-header" onclick="this.nextElementSibling.classList.toggle('expanded')"><div class="job-title">${data.job}</div><div class="job-meta"><div class="job-badge">Build #${data.build}</div><div class="job-badge">${(data.log_size/1024).toFixed(1)}KB</div><div class="expand-icon">▼</div></div></div><div class="job-content expanded"><div class="job-body">${data.analysis}</div></div>`;
+                                document.getElementById('jobResults').appendChild(card);
+                                updateStats();
+                            }
+                            else if (data.type === 'complete') {
+                                document.getElementById('statusMessage').textContent = '✅ ' + data.message;
+                                document.getElementById('progressFill').style.width = '100%';
+                                document.getElementById('progressFill').textContent = '100%';
+                                document.getElementById('exportButtons').classList.add('active'); // Show export buttons
+                            }
+                        }
+                    }
+                }
+            } catch (e) { alert('Error: ' + e.message); }
+            document.getElementById('analyzeBtn').disabled = false;
+        }
+        
+        function updateStats() {
+            const stats = document.getElementById('summaryStats');
+            stats.innerHTML = `<div class="stat-card"><div class="stat-value">${analyzedCount}</div><div class="stat-label">Jobs Analyzed</div></div><div class="stat-card"><div class="stat-value">${jobCount}</div><div class="stat-label">Total Jobs</div></div><div class="stat-card"><div class="stat-value">${jobCount ? Math.round((analyzedCount/jobCount)*100) : 0}%</div><div class="stat-label">Progress</div></div>`;
+        }
+
+	        function escapeXml(unsafe) {
+	            if (unsafe == null) return '';
+	            return unsafe
+	                .replace(/&/g, '&amp;')
+	                .replace(/</g, '&lt;')
+	                .replace(/>/g, '&gt;')
+	                .replace(/"/g, '&quot;')
+	                .replace(/'/g, '&apos;');
+	        }
+
+        function exportAsJSON() {
+            if (analysisResults.length === 0) {
+                alert('No analysis results to export');
+                return;
+            }
+            const dataStr = JSON.stringify(analysisResults, null, 2);
+            const dataBlob = new Blob([dataStr], {type: 'application/json'});
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `jenkins-analysis-${new Date().toISOString().replace(/:/g, '-')}.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+        }
+
+	        function exportAsXML() {
+	            if (analysisResults.length === 0) {
+	                alert('No analysis results to export');
+	                return;
+	            }
+
+	            let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<analysisResults>\n';
+	            analysisResults.forEach((result) => {
+	                xml += '  <jobResult>\n';
+	                xml += `    <job>${escapeXml(result.job)}</job>\n`;
+	                xml += `    <build>${escapeXml(String(result.build))}</build>\n`;
+	                xml += `    <logSize>${result.log_size}</logSize>\n`;
+	                xml += `    <timestamp>${escapeXml(result.timestamp)}</timestamp>\n`;
+	                xml += `    <analysis>${escapeXml(result.analysis)}</analysis>\n`;
+	                xml += '  </jobResult>\n';
+	            });
+	            xml += '</analysisResults>\n';
+
+	            const dataBlob = new Blob([xml], {type: 'application/xml'});
+	            const url = URL.createObjectURL(dataBlob);
+	            const link = document.createElement('a');
+	            link.href = url;
+	            link.download = `jenkins-analysis-${new Date().toISOString().replace(/:/g, '-')}.xml`;
+	            link.click();
+	            URL.revokeObjectURL(url);
+	        }
+    </script>
+</body>
+</html>
