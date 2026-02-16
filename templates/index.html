@@ -535,6 +535,15 @@
                                 document.getElementById('progressFill').style.width = '100%';
                                 document.getElementById('progressFill').textContent = '100%';
                                 document.getElementById('exportButtons').classList.add('active'); // Show export buttons
+
+                                // Show pipeline view for all analyses
+                                if (analysisResults.length > 0) {
+                                    document.getElementById('pipelineView').style.display = 'block';
+                                    document.getElementById('pipelineName').textContent = '📊 Analysis Results';
+                                    document.getElementById('pipelineDesc').textContent = `Completed analysis of ${analysisResults.length} jobs`;
+                                    document.getElementById('pipelineJobCount').textContent = analysisResults.length;
+                                    updatePipelineStages();
+                                }
                             }
                         }
                     }
