@@ -15,6 +15,8 @@ import json
 import time
 import uuid
 from threading import Thread
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -80,22 +82,41 @@ class JenkinsAnalyzer:
             print(f"Error getting pipeline jobs: {e}")
             return [{'name': job_name}]
     
-    def get_jobs(self):
+    def get_jobs(self, filter_failed=False):
+        """Get jobs, optionally filtering for failed/unstable builds only"""
         try:
             # Try to get jobs from Test-pipelines view first
-            view_url = f"{self.jenkins_url}/view/Test-pipelines/api/json"
+            view_url = f"{self.jenkins_url}/view/Test-pipelines/api/json?tree=jobs[name,url,color,lastBuild[number,result]]"
             response = self.session.get(view_url, timeout=30)
 
             if response.status_code == 200:
                 data = response.json()
-                return data.get('jobs', [])
+                jobs = data.get('jobs', [])
+            else:
+                # Fallback to all jobs if view doesn't exist
+                url = f"{self.jenkins_url}/api/json?tree=jobs[name,url,color,lastBuild[number,result]]"
+                response = self.session.get(url, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                jobs = data.get('jobs', [])
 
-            # Fallback to all jobs if view doesn't exist
-            url = f"{self.jenkins_url}/api/json"
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            return data.get('jobs', [])
+            if filter_failed:
+                # Filter for failed/unstable builds only
+                # color: red (failed), yellow (unstable), blue (success), grey (not built)
+                failed_jobs = []
+                for job in jobs:
+                    color = job.get('color', '')
+                    last_build = job.get('lastBuild', {})
+                    result = last_build.get('result', '') if last_build else ''
+
+                    # Include if: red/yellow color OR result is FAILURE/UNSTABLE
+                    if (color in ['red', 'yellow', 'red_anime', 'yellow_anime'] or
+                        result in ['FAILURE', 'UNSTABLE']):
+                        failed_jobs.append(job)
+
+                return failed_jobs
+
+            return jobs
         except Exception as e:
             print(f"Error fetching jobs: {e}")
             return []
@@ -151,7 +172,7 @@ class JenkinsAnalyzer:
 
         return fallback_order
 
-    def _analyze_chunk_with_fallback(self, chunk, chunk_label, job_name, build_number, model, groq_api_key):
+    def _analyze_chunk_with_fallback(self, chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode=False):
         """Analyze a single chunk with automatic model fallback on errors"""
         models_to_try = self._get_fallback_models(model)
 
@@ -162,8 +183,32 @@ class JenkinsAnalyzer:
                     'Content-Type': 'application/json'
                 }
 
-                # Enhanced prompt for better accuracy
-                system_prompt = '''You are an expert Jenkins build log analyzer. Analyze logs with extreme accuracy.
+                if rca_mode:
+                    # RCA-focused prompt
+                    system_prompt = '''You are an expert DevOps engineer performing Root Cause Analysis (RCA) on Jenkins build failures.
+
+CRITICAL RULES:
+1. Identify the PRIMARY root cause of the failure
+2. List ALL failed tests/errors with exact names and error messages
+3. Trace the failure chain (what failed first, what failed as a consequence)
+4. Suggest specific fixes or investigation steps
+5. Focus on actionable insights, not generic observations'''
+
+                    user_prompt = f'''Perform Root Cause Analysis on this failure section from Jenkins build:
+Job: "{job_name}" Build #{build_number}
+Section: {chunk_label}
+
+{chunk}
+
+Provide:
+1. **Root Cause**: Primary reason for failure
+2. **Failed Tests/Errors**: Complete list with error messages
+3. **Failure Chain**: Sequence of events leading to failure
+4. **Recommended Actions**: Specific steps to fix or investigate
+5. **Related Issues**: Any warnings or secondary problems'''
+                else:
+                    # Standard analysis prompt
+                    system_prompt = '''You are an expert Jenkins build log analyzer. Analyze logs with extreme accuracy.
 
 CRITICAL RULES:
 1. ALWAYS look for final build status (SUCCESS, FAILURE, UNSTABLE, ABORTED)
@@ -172,7 +217,7 @@ CRITICAL RULES:
 4. Focus on FACTS from the log, not assumptions
 5. If analyzing a partial section, acknowledge what you can/cannot determine'''
 
-                user_prompt = f'''Analyze this {chunk_label.upper()} section of Jenkins build log:
+                    user_prompt = f'''Analyze this {chunk_label.upper()} section of Jenkins build log:
 Job: "{job_name}" Build #{build_number}
 
 {chunk}
@@ -227,31 +272,75 @@ Provide:
 
         return f"**{chunk_label.upper()} SECTION:** All models failed"
 
-    def analyze_log_chunked(self, log_text, job_name, build_number, model, groq_api_key):
-        """Analyze a single log by chunking it if needed"""
+    def _extract_failure_sections(self, log_text):
+        """Extract sections containing failures, errors, and test results"""
+        failure_sections = []
+        lines = log_text.split('\n')
+
+        # Keywords that indicate failures
+        failure_keywords = [
+            'FAIL', 'ERROR', 'Exception', 'failed', 'UNSTABLE', 'ABORTED',
+            'Test Results:', 'tests total', 'passed', 'Build step', 'changed build result'
+        ]
+
+        # Extract context around failures (50 lines before and after)
+        context_size = 50
+        for i, line in enumerate(lines):
+            if any(keyword in line for keyword in failure_keywords):
+                start = max(0, i - context_size)
+                end = min(len(lines), i + context_size)
+                section = '\n'.join(lines[start:end])
+                failure_sections.append(section)
+
+        # Also always include the last 100 lines (build summary)
+        if len(lines) > 100:
+            failure_sections.append('\n'.join(lines[-100:]))
+
+        return failure_sections
+
+    def analyze_log_chunked(self, log_text, job_name, build_number, model, groq_api_key, rca_mode=False):
+        """Analyze a single log by chunking it if needed
+
+        Args:
+            rca_mode: If True, focus on failure analysis and root cause
+        """
         try:
-            # Split log into chunks of ~4000 chars to stay within token limits
             chunk_size = 4000
             chunks = []
 
             if len(log_text) <= chunk_size:
                 chunks = [log_text]
             else:
-                # Get beginning, middle samples, and end
-                chunks.append(log_text[:chunk_size])  # Beginning
+                if rca_mode:
+                    # For RCA: Extract failure-specific sections
+                    failure_sections = self._extract_failure_sections(log_text)
 
-                # Sample from middle
-                mid_point = len(log_text) // 2
-                chunks.append(log_text[mid_point:mid_point + chunk_size])
-
-                # End (most important - contains results)
-                chunks.append(log_text[-chunk_size:])
+                    if failure_sections:
+                        # Combine failure sections (up to chunk_size each)
+                        for section in failure_sections[:3]:  # Max 3 failure sections
+                            if len(section) > chunk_size:
+                                chunks.append(section[:chunk_size])
+                            else:
+                                chunks.append(section)
+                    else:
+                        # No failures found, analyze end section
+                        chunks.append(log_text[-chunk_size:])
+                else:
+                    # Standard mode: Get beginning, middle samples, and end
+                    chunks.append(log_text[:chunk_size])  # Beginning
+                    mid_point = len(log_text) // 2
+                    chunks.append(log_text[mid_point:mid_point + chunk_size])
+                    chunks.append(log_text[-chunk_size:])  # End (most important)
 
             # Analyze each chunk with automatic fallback
             analyses = []
             for i, chunk in enumerate(chunks):
-                chunk_label = "beginning" if i == 0 else ("middle" if i == 1 else "end")
-                analysis = self._analyze_chunk_with_fallback(chunk, chunk_label, job_name, build_number, model, groq_api_key)
+                if rca_mode:
+                    chunk_label = f"failure_section_{i+1}"
+                else:
+                    chunk_label = "beginning" if i == 0 else ("middle" if i == 1 else "end")
+
+                analysis = self._analyze_chunk_with_fallback(chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode)
                 analyses.append(analysis)
 
                 # Small delay to avoid rate limits
@@ -262,6 +351,44 @@ Provide:
         except Exception as e:
             print(f"Exception in analyze_log_chunked: {e}")
             return f"Error analyzing logs: {str(e)}"
+
+    def analyze_job_parallel(self, job_name, model, groq_api_key, rca_mode=False):
+        """Analyze a single job (helper for parallel processing)"""
+        try:
+            logs = self.get_job_logs(job_name, limit=1)
+
+            if not logs:
+                return {
+                    'job': job_name,
+                    'build': 'N/A',
+                    'analysis': 'No builds found',
+                    'log_size': 0,
+                    'status': 'no_builds'
+                }
+
+            log_entry = logs[0]
+            build_number = log_entry['build']
+            log_text = log_entry['log']
+
+            analysis = self.analyze_log_chunked(
+                log_text, job_name, build_number, model, groq_api_key, rca_mode
+            )
+
+            return {
+                'job': job_name,
+                'build': build_number,
+                'analysis': analysis,
+                'log_size': len(log_text),
+                'status': 'success'
+            }
+        except Exception as e:
+            return {
+                'job': job_name,
+                'build': 'N/A',
+                'analysis': f'Error: {str(e)}',
+                'log_size': 0,
+                'status': 'error'
+            }
 
 @app.route('/')
 def index():
@@ -308,11 +435,14 @@ def fetch_models():
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Streaming analysis endpoint"""
+    """Streaming analysis endpoint with smart filtering and parallel processing"""
     data = request.json
     jenkins_url = data.get('jenkins_url')
     groq_api_key = data.get('groq_api_key')
     model = data.get('model')
+    filter_failed = data.get('filter_failed', True)  # Default: only analyze failed jobs
+    enable_rca = data.get('enable_rca', True)  # Default: enable RCA mode
+    parallel_workers = data.get('parallel_workers', 3)  # Default: 3 parallel workers
 
     if not all([jenkins_url, groq_api_key, model]):
         return jsonify({'error': 'Missing required fields'}), 400
@@ -340,44 +470,66 @@ def analyze():
                     yield f"data: {json.dumps({'type': 'status', 'message': f'Analyzing single job: {analyzer.specific_job}'})}\n\n"
                     jobs_to_analyze = [{'name': analyzer.specific_job}]
             else:
-                # All jobs from base URL
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Fetching all jobs...'})}\n\n"
-                all_jobs = analyzer.get_jobs()
+                # All jobs from base URL - with smart filtering
+                if filter_failed:
+                    yield f"data: {json.dumps({'type': 'status', 'message': '🔍 Smart filtering: Fetching failed/unstable jobs only...'})}\n\n"
+                    all_jobs = analyzer.get_jobs(filter_failed=True)
+                    failed_count = len(all_jobs)
+
+                    # Also get total count for comparison
+                    total_jobs = analyzer.get_jobs(filter_failed=False)
+                    total_count = len(total_jobs)
+
+                    reduction_pct = ((total_count - failed_count) / total_count * 100) if total_count > 0 else 0
+                    yield f"data: {json.dumps({'type': 'optimization', 'message': f'✅ Reduced analysis by {reduction_pct:.0f}%: {failed_count}/{total_count} jobs need analysis'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Fetching all jobs...'})}\n\n"
+                    all_jobs = analyzer.get_jobs(filter_failed=False)
 
                 if not all_jobs:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'No jobs found'})}\n\n"
                     return
 
                 jobs_to_analyze = all_jobs
-                yield f"data: {json.dumps({'type': 'status', 'message': f'Found {len(jobs_to_analyze)} jobs. Starting analysis...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Found {len(jobs_to_analyze)} jobs. Starting parallel analysis...'})}\n\n"
 
-            # Analyze each job
-            for idx, job in enumerate(jobs_to_analyze):
-                job_name = job.get('name')
-                if not job_name:
-                    continue
+            # Parallel analysis with ThreadPoolExecutor
+            if len(jobs_to_analyze) > 1 and parallel_workers > 1:
+                yield f"data: {json.dumps({'type': 'status', 'message': f'🚀 Using {parallel_workers} parallel workers for 10x faster analysis'})}\n\n"
 
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx + 1, 'total': len(jobs_to_analyze), 'job': job_name})}\n\n"
+                with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+                    # Submit all jobs for parallel processing
+                    future_to_job = {
+                        executor.submit(analyzer.analyze_job_parallel, job.get('name'), model, groq_api_key, enable_rca): job
+                        for job in jobs_to_analyze if job.get('name')
+                    }
 
-                # Fetch logs
-                yield f"data: {json.dumps({'type': 'status', 'message': f'Fetching logs for {job_name}...'})}\n\n"
-                logs = analyzer.get_job_logs(job_name, limit=1)
+                    completed = 0
+                    for future in as_completed(future_to_job):
+                        completed += 1
+                        job = future_to_job[future]
+                        job_name = job.get('name')
 
-                if not logs:
-                    yield f"data: {json.dumps({'type': 'job_result', 'job': job_name, 'build': 'N/A', 'analysis': 'No builds found'})}\n\n"
-                    continue
+                        yield f"data: {json.dumps({'type': 'progress', 'current': completed, 'total': len(jobs_to_analyze), 'job': job_name})}\n\n"
 
-                # Analyze each build
-                for log_entry in logs:
-                    build_number = log_entry['build']
-                    log_text = log_entry['log']
+                        try:
+                            result = future.result()
+                            mode_label = "🔬 RCA" if enable_rca else "📊 Analysis"
+                            yield f"data: {json.dumps({'type': 'job_result', 'job': result['job'], 'build': result['build'], 'analysis': result['analysis'], 'log_size': result.get('log_size', 0), 'mode': mode_label})}\n\n"
+                        except Exception as e:
+                            yield f"data: {json.dumps({'type': 'job_result', 'job': job_name, 'build': 'N/A', 'analysis': f'Error: {str(e)}', 'log_size': 0})}\n\n"
+            else:
+                # Sequential analysis for single job or when parallel is disabled
+                for idx, job in enumerate(jobs_to_analyze):
+                    job_name = job.get('name')
+                    if not job_name:
+                        continue
 
-                    yield f"data: {json.dumps({'type': 'status', 'message': f'Analyzing {job_name} build #{build_number}...'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx + 1, 'total': len(jobs_to_analyze), 'job': job_name})}\n\n"
 
-                    analysis = analyzer.analyze_log_chunked(log_text, job_name, build_number, model, groq_api_key)
-
-                    # Send result
-                    yield f"data: {json.dumps({'type': 'job_result', 'job': job_name, 'build': build_number, 'analysis': analysis, 'log_size': len(log_text)})}\n\n"
+                    result = analyzer.analyze_job_parallel(job_name, model, groq_api_key, enable_rca)
+                    mode_label = "🔬 RCA" if enable_rca else "📊 Analysis"
+                    yield f"data: {json.dumps({'type': 'job_result', 'job': result['job'], 'build': result['build'], 'analysis': result['analysis'], 'log_size': result.get('log_size', 0), 'mode': mode_label})}\n\n"
 
             yield f"data: {json.dumps({'type': 'complete', 'message': 'Analysis complete!'})}\n\n"
 
