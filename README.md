@@ -374,7 +374,7 @@ jenkins-log-analyzer/
 
 ## Author
 
-Created by **Chandravijay Agrawal** ([@cagrawalcode](https://github.com/cagrawalcode))
+Created by **Chandravijay Agrawal** ([@ScienceArtist](https://github.com/ScienceArtist))
 
 ## License
 

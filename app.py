@@ -1,7 +1,7 @@
 """Jenkins Log Analyzer
 
-Author: Chandravijay Agrawal (@cagrawalcode)
-GitHub: https://github.com/cagrawalcode
+Author: Chandravijay Agrawal (@ScienceArtist)
+GitHub: https://github.com/ScienceArtist
 Description: AI-powered Jenkins log analyzer with real-time streaming results.
 """
 
