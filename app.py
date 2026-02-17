@@ -17,6 +17,7 @@ import uuid
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
+from datetime import datetime, timedelta
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -122,7 +123,7 @@ class JenkinsAnalyzer:
             return []
     
     def get_job_logs(self, job_name, limit=1):
-        """Fetch complete logs for a job's builds"""
+        """Fetch complete logs for a job's builds - prioritize Robot Framework logs"""
         logs = []
         try:
             job_url = f"{self.jenkins_url}/job/{job_name}/api/json"
@@ -135,27 +136,278 @@ class JenkinsAnalyzer:
             for build in builds:
                 build_number = build.get('number')
                 if build_number:
-                    console_url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
-                    log_response = self.session.get(console_url, timeout=30)
+                    # First, try to get Robot Framework logs (much better for analysis)
+                    robot_log = self._get_robot_framework_log(job_name, build_number)
 
-                    if log_response.status_code == 200:
-                        # Return complete log - we'll chunk it during analysis
+                    if robot_log and robot_log.startswith('PASSED|||'):
+                        # All tests passed - return special marker
+                        parts = robot_log.split('|||')
+                        passed_count = parts[1] if len(parts) > 1 else '0'
+                        total_count = parts[2] if len(parts) > 2 else '0'
                         logs.append({
                             'build': build_number,
-                            'log': log_response.text,
-                            'job_name': job_name
+                            'log': robot_log,
+                            'job_name': job_name,
+                            'log_type': 'passed',
+                            'passed_tests': int(passed_count),
+                            'total_tests': int(total_count)
                         })
+                    elif robot_log:
+                        # Robot logs with failures - use them!
+                        logs.append({
+                            'build': build_number,
+                            'log': robot_log,
+                            'job_name': job_name,
+                            'log_type': 'robot'
+                        })
+                    else:
+                        # Fall back to console logs (no Robot Framework artifacts found)
+                        console_url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
+                        log_response = self.session.get(console_url, timeout=30)
+
+                        if log_response.status_code == 200:
+                            # Return complete log - we'll chunk it during analysis
+                            logs.append({
+                                'build': build_number,
+                                'log': log_response.text,
+                                'job_name': job_name,
+                                'log_type': 'console'
+                            })
         except Exception as e:
             print(f"Error fetching logs for {job_name}: {e}")
 
         return logs
+
+    def _get_robot_framework_log(self, job_name, build_number):
+        """
+        Intelligent Robot Framework log extraction:
+        1. Parse output.xml to find failed test names
+        2. Extract ONLY those specific test logs from DEBUG.log and console
+        3. Reduces log size by ~90% - only analyze what failed!
+
+        Returns:
+            - String with extracted logs if there are failed tests
+            - "PASSED" if all tests passed (special marker)
+            - None if Robot Framework artifacts not found
+        """
+        try:
+            # Step 1: Get output.xml to find failed test names
+            # Try multiple possible locations for output.xml (most common first)
+            possible_urls = [
+                f"{self.jenkins_url}/job/{job_name}/{build_number}/robot/report/output.xml",  # Most common
+                f"{self.jenkins_url}/job/{job_name}/{build_number}/robot/output.xml",
+                f"{self.jenkins_url}/job/{job_name}/{build_number}/artifact/output.xml",
+            ]
+
+            response = None
+            robot_xml_url = None
+
+            for url in possible_urls:
+                try:
+                    resp = self.session.get(url, timeout=30)
+                    if resp.status_code == 200:
+                        response = resp
+                        robot_xml_url = url
+                        print(f"Found Robot output.xml at: {url}")
+                        break
+                except:
+                    continue
+
+            if not response or response.status_code != 200:
+                print(f"Robot output.xml not found for {job_name}/{build_number} - tried {len(possible_urls)} locations")
+                return None
+
+            # Parse XML to extract failed test names and test statistics
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(response.text)
+
+            failed_test_names = []
+            failed_test_details = []
+            total_tests = 0
+            passed_tests = 0
+
+            # Find all tests and count pass/fail
+            for test in root.findall('.//test'):
+                total_tests += 1
+                status = test.find('status')
+                if status is not None:
+                    if status.get('status') == 'FAIL':
+                        test_name = test.get('name', 'Unknown')
+                        msg = status.text or 'No message'
+                        failed_test_names.append(test_name)
+                        failed_test_details.append({
+                            'name': test_name,
+                            'message': msg
+                        })
+                    elif status.get('status') == 'PASS':
+                        passed_tests += 1
+
+            if not failed_test_names:
+                print(f"✅ All tests passed for {job_name}/{build_number} ({passed_tests}/{total_tests} tests passed) - skipping analysis")
+                # Return special marker with test statistics
+                return f"PASSED|||{passed_tests}|||{total_tests}"
+
+            print(f"Found {len(failed_test_names)} failed tests out of {total_tests} total tests: {failed_test_names}")
+
+            # Step 2: Extract specific test logs from DEBUG.log and console
+            extracted_logs = []
+            extracted_logs.append("=== ROBOT FRAMEWORK ANALYSIS - FAILED TESTS ONLY ===\n")
+            extracted_logs.append(f"Test Statistics: {passed_tests} passed, {len(failed_test_names)} failed, {total_tests} total\n")
+            extracted_logs.append(f"Failed tests: {len(failed_test_names)}\n")
+
+            # Add failed test summary
+            for detail in failed_test_details:
+                extracted_logs.append(f"\n--- FAILED TEST: {detail['name']} ---")
+                extracted_logs.append(f"Error: {detail['message']}\n")
+
+            # Step 3: Try to get DEBUG.log and extract only failed test sections
+            # First, try to discover DEBUG.log location from Jenkins artifacts API
+            debug_log_urls = []
+
+            try:
+                artifacts_url = f"{self.jenkins_url}/job/{job_name}/{build_number}/api/json?tree=artifacts[relativePath]"
+                artifacts_response = self.session.get(artifacts_url, timeout=10)
+                if artifacts_response.status_code == 200:
+                    artifacts_data = artifacts_response.json()
+                    artifacts = artifacts_data.get('artifacts', [])
+
+                    # Look for DEBUG.log in artifacts
+                    for artifact in artifacts:
+                        rel_path = artifact.get('relativePath', '')
+                        if 'DEBUG.log' in rel_path:
+                            debug_log_urls.append(f"{self.jenkins_url}/job/{job_name}/{build_number}/artifact/{rel_path}")
+                            print(f"Discovered DEBUG.log at: artifact/{rel_path}")
+                            break
+            except Exception as e:
+                print(f"Could not discover artifacts via API: {e}")
+
+            # Add standard fallback locations if not discovered
+            if not debug_log_urls:
+                debug_log_urls.extend([
+                    f"{self.jenkins_url}/job/{job_name}/{build_number}/robot/log/DEBUG.log",
+                    f"{self.jenkins_url}/job/{job_name}/{build_number}/robot/DEBUG.log",
+                    f"{self.jenkins_url}/job/{job_name}/{build_number}/artifact/DEBUG.log",
+                    f"{self.jenkins_url}/job/{job_name}/{build_number}/artifact/logs/DEBUG.log",
+                ])
+
+            debug_log = None
+            for url in debug_log_urls:
+                try:
+                    debug_response = self.session.get(url, timeout=30)
+                    if debug_response.status_code == 200:
+                        debug_log = debug_response.text
+                        print(f"Found DEBUG.log at: {url}")
+                        break
+                except:
+                    continue
+
+            if debug_log:
+                extracted_logs.append("\n=== EXTRACTED FROM DEBUG.LOG (FAILED TESTS ONLY) ===\n")
+
+                # Extract logs for each failed test
+                for test_name in failed_test_names[:5]:  # Limit to first 5 failed tests
+                    test_section = self._extract_test_section_from_log(debug_log, test_name)
+                    if test_section:
+                        extracted_logs.append(f"\n--- DEBUG LOG FOR: {test_name} ---")
+                        extracted_logs.append(test_section)
+            else:
+                print(f"DEBUG.log not found - tried {len(debug_log_urls)} locations")
+
+            # Step 4: Try to get console log and extract only failed test sections
+            console_url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
+            console_response = self.session.get(console_url, timeout=30)
+
+            if console_response.status_code == 200:
+                console_log = console_response.text
+                extracted_logs.append("\n=== EXTRACTED FROM CONSOLE LOG (FAILED TESTS ONLY) ===\n")
+
+                # Extract logs for each failed test
+                for test_name in failed_test_names[:5]:  # Limit to first 5 failed tests
+                    test_section = self._extract_test_section_from_log(console_log, test_name)
+                    if test_section:
+                        extracted_logs.append(f"\n--- CONSOLE LOG FOR: {test_name} ---")
+                        extracted_logs.append(test_section)
+
+            result = '\n'.join(extracted_logs)
+
+            # Only return if we got meaningful content
+            if len(result) > 200:
+                print(f"Extracted {len(result)} chars of focused logs (vs full log size)")
+                return result
+
+        except Exception as e:
+            print(f"Error extracting Robot Framework logs: {e}")
+            import traceback
+            traceback.print_exc()
+
+        return None
+
+    def _extract_test_section_from_log(self, log_content, test_name):
+        """
+        Extract a specific test's log section from start to finish.
+        Uses pattern matching to find test boundaries.
+        """
+        try:
+            lines = log_content.split('\n')
+            test_lines = []
+            in_test = False
+            test_started = False
+
+            # Common patterns that indicate test start/end
+            # Robot Framework typically logs test names in specific formats
+            test_name_clean = test_name.strip()
+
+            for i, line in enumerate(lines):
+                # Check if this line starts the test
+                if test_name_clean in line and not test_started:
+                    # Found the test - start capturing
+                    in_test = True
+                    test_started = True
+                    # Include some context before (5 lines)
+                    start_idx = max(0, i - 5)
+                    test_lines.extend(lines[start_idx:i+1])
+                    continue
+
+                if in_test:
+                    test_lines.append(line)
+
+                    # Check if test ended (common end patterns)
+                    # Robot Framework logs often have clear test boundaries
+                    if any(pattern in line for pattern in [
+                        'FAIL', 'PASS', 'Test execution ended',
+                        '=' * 20,  # Separator lines
+                        'Ending test:',
+                        '| FAIL |', '| PASS |'
+                    ]):
+                        # Include some context after (10 lines for error details)
+                        end_idx = min(len(lines), i + 10)
+                        test_lines.extend(lines[i+1:end_idx])
+                        break
+
+                    # Safety limit - don't extract more than 500 lines per test
+                    if len(test_lines) > 500:
+                        test_lines.append("\n... (truncated - test log too long) ...")
+                        break
+
+            if test_lines:
+                return '\n'.join(test_lines)
+
+        except Exception as e:
+            print(f"Error extracting test section for {test_name}: {e}")
+
+        return None
     
-    def _get_fallback_models(self, primary_model):
+    def _get_fallback_models(self, primary_model, enable_fallback=True):
         """Get ordered list of fallback models to try if primary fails"""
+        # If fallback is disabled, only return the primary model
+        if not enable_fallback:
+            return [primary_model]
+
         # Ordered by preference: larger models first for better accuracy
         # Only active models (as of Feb 2026) - removed decommissioned models
         all_models = [
-            'llama-3.3-70b-versatile',      # Best quality, primary choice
+            'gpt-oss-120b',                 # Best quality, largest open-source model
+            'llama-3.3-70b-versatile',      # Excellent quality, primary choice
             'llama-3.3-70b-specdec',        # Speculative decoding variant
             'mixtral-8x7b-32768',           # Fast, efficient, good for long contexts
             'gemma2-9b-it',                 # Good balance of speed and quality
@@ -172,9 +424,9 @@ class JenkinsAnalyzer:
 
         return fallback_order
 
-    def _analyze_chunk_with_fallback(self, chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode=False):
+    def _analyze_chunk_with_fallback(self, chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode=False, enable_fallback=True):
         """Analyze a single chunk with automatic model fallback on errors"""
-        models_to_try = self._get_fallback_models(model)
+        models_to_try = self._get_fallback_models(model, enable_fallback)
 
         for attempt, current_model in enumerate(models_to_try):
             try:
@@ -185,14 +437,21 @@ class JenkinsAnalyzer:
 
                 if rca_mode:
                     # RCA-focused prompt
-                    system_prompt = '''You are an expert DevOps engineer performing Root Cause Analysis (RCA) on Jenkins build failures.
+                    system_prompt = '''You are an expert QA engineer performing Root Cause Analysis (RCA) on Jenkins build failures.
 
-CRITICAL RULES:
+CRITICAL RULES FOR ACCURACY:
+1. ONLY state facts you can verify from the logs - NEVER guess or assume
+2. If uncertain about root cause, explicitly say "Unable to determine from available logs"
+3. Distinguish clearly between symptoms and actual root causes
+4. When suggesting actions, be honest if you're not 100% certain
+5. If logs are incomplete or unclear, state what additional information is needed
+
+ANALYSIS FOCUS:
 1. Identify the PRIMARY root cause of the failure
 2. List ALL failed tests/errors with exact names and error messages
 3. Trace the failure chain (what failed first, what failed as a consequence)
-4. Suggest specific fixes or investigation steps
-5. Focus on actionable insights, not generic observations'''
+4. Suggest specific actionable steps: "Retest", "Create bug", "Check config", "Manual investigation needed", etc.
+5. Focus on actionable insights for QA team, not generic observations'''
 
                     user_prompt = f'''Perform Root Cause Analysis on this failure section from Jenkins build:
 Job: "{job_name}" Build #{build_number}
@@ -200,34 +459,39 @@ Section: {chunk_label}
 
 {chunk}
 
-Provide:
-1. **Root Cause**: Primary reason for failure
-2. **Failed Tests/Errors**: Complete list with error messages
+Provide (BE HONEST - say "unclear" or "unable to determine" if you cannot be certain):
+1. **Root Cause**: Primary reason for failure (or state if unclear from logs)
+2. **Failed Tests/Errors**: Complete list with exact error messages
 3. **Failure Chain**: Sequence of events leading to failure
-4. **Recommended Actions**: Specific steps to fix or investigate
-5. **Related Issues**: Any warnings or secondary problems'''
+4. **Recommended Actions**: Specific steps (e.g., "Retest - transient issue", "Create bug - code defect", "Manual investigation needed - unclear from logs")
+5. **Confidence Level**: State if you're certain, somewhat certain, or uncertain about the analysis
+6. **Related Issues**: Any warnings or secondary problems'''
                 else:
                     # Standard analysis prompt
-                    system_prompt = '''You are an expert Jenkins build log analyzer. Analyze logs with extreme accuracy.
+                    system_prompt = '''You are an expert Jenkins build log analyzer for QA teams. Analyze logs with EXTREME ACCURACY.
 
-CRITICAL RULES:
-1. ALWAYS look for final build status (SUCCESS, FAILURE, UNSTABLE, ABORTED)
-2. Count and list ALL failed tests/errors explicitly
-3. Never say "build is running" if you see completion markers
-4. Focus on FACTS from the log, not assumptions
-5. If analyzing a partial section, acknowledge what you can/cannot determine'''
+CRITICAL RULES FOR ACCURACY:
+1. ONLY state facts you can verify from the logs - NEVER guess or assume
+2. If uncertain, explicitly say "Unable to determine" or "Unclear from this section"
+3. ALWAYS look for final build status (SUCCESS, FAILURE, UNSTABLE, ABORTED)
+4. Count and list ALL failed tests/errors explicitly
+5. Never say "build is running" if you see completion markers
+6. Focus on FACTS from the log, not assumptions
+7. If analyzing a partial section, clearly state what you can/cannot determine
+8. When in doubt, recommend manual investigation rather than making uncertain claims'''
 
                     user_prompt = f'''Analyze this {chunk_label.upper()} section of Jenkins build log:
 Job: "{job_name}" Build #{build_number}
 
 {chunk}
 
-Provide:
-1. **Build Status**: (if determinable from this section)
-2. **Errors/Failures**: List specific errors with line context
-3. **Warnings**: List any warnings found
-4. **Key Insights**: Important observations
-5. **Test Results**: Pass/fail counts if visible'''
+Provide (BE HONEST - say "unclear" or "not visible in this section" if uncertain):
+1. **Build Status**: (if determinable from this section, otherwise state "Not visible in this section")
+2. **Errors/Failures**: List specific errors with line context (or "None found in this section")
+3. **Warnings**: List any warnings found (or "None found")
+4. **Key Insights**: Important observations based on facts
+5. **Test Results**: Pass/fail counts if visible (or "Not visible in this section")
+6. **Confidence**: State if this section provides complete or partial information'''
 
                 payload = {
                     'model': current_model,
@@ -250,8 +514,49 @@ Provide:
                     error_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
                     error_code = error_data.get('error', {}).get('code', '')
 
-                    # Errors that should trigger fallback to next model
-                    recoverable_errors = ['rate_limit_exceeded', 'model_decommissioned', 'model_not_found']
+                    # Special handling for rate limits - stop analysis and inform user
+                    if error_code == 'rate_limit_exceeded':
+                        error_message = error_data.get('error', {}).get('message', '')
+                        # Try to extract reset time from error message or headers
+                        reset_time = None
+
+                        # Check X-RateLimit-Reset header (Unix timestamp)
+                        if 'X-RateLimit-Reset' in response.headers:
+                            try:
+                                reset_timestamp = int(response.headers['X-RateLimit-Reset'])
+                                reset_time = datetime.fromtimestamp(reset_timestamp)
+                            except:
+                                pass
+
+                        # If no header, try to parse from error message
+                        if not reset_time:
+                            import re
+                            # Look for patterns like "try again in 5m30s" or "retry after 330 seconds"
+                            time_match = re.search(r'(\d+)m(\d+)s|(\d+)\s*seconds?', error_message)
+                            if time_match:
+                                if time_match.group(1):  # Format: 5m30s
+                                    minutes = int(time_match.group(1))
+                                    seconds = int(time_match.group(2))
+                                    total_seconds = minutes * 60 + seconds
+                                else:  # Format: 330 seconds
+                                    total_seconds = int(time_match.group(3))
+                                reset_time = datetime.now() + timedelta(seconds=total_seconds)
+
+                        # Format the error message with reset time
+                        if reset_time:
+                            time_until_reset = reset_time - datetime.now()
+                            minutes = int(time_until_reset.total_seconds() // 60)
+                            seconds = int(time_until_reset.total_seconds() % 60)
+                            reset_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+                            reset_timestamp = reset_time.strftime('%H:%M:%S')
+                            error_msg = f"RATE_LIMIT_STOP|||Reset in {reset_str} (at {reset_timestamp})|||{error_message}"
+                        else:
+                            error_msg = f"RATE_LIMIT_STOP|||Reset time unknown|||{error_message}"
+
+                        return f"**{chunk_label.upper()} SECTION:** {error_msg}"
+
+                    # Errors that should trigger fallback to next model (excluding rate limits)
+                    recoverable_errors = ['model_decommissioned', 'model_not_found']
 
                     if error_code in recoverable_errors and attempt < len(models_to_try) - 1:
                         next_model = models_to_try[attempt + 1]
@@ -298,11 +603,12 @@ Provide:
 
         return failure_sections
 
-    def analyze_log_chunked(self, log_text, job_name, build_number, model, groq_api_key, rca_mode=False):
+    def analyze_log_chunked(self, log_text, job_name, build_number, model, groq_api_key, rca_mode=False, enable_fallback=True):
         """Analyze a single log by chunking it if needed
 
         Args:
             rca_mode: If True, focus on failure analysis and root cause
+            enable_fallback: If True, cycle through fallback models on errors
         """
         try:
             chunk_size = 4000
@@ -340,7 +646,7 @@ Provide:
                 else:
                     chunk_label = "beginning" if i == 0 else ("middle" if i == 1 else "end")
 
-                analysis = self._analyze_chunk_with_fallback(chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode)
+                analysis = self._analyze_chunk_with_fallback(chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode, enable_fallback)
                 analyses.append(analysis)
 
                 # Small delay to avoid rate limits
@@ -352,7 +658,7 @@ Provide:
             print(f"Exception in analyze_log_chunked: {e}")
             return f"Error analyzing logs: {str(e)}"
 
-    def analyze_job_parallel(self, job_name, model, groq_api_key, rca_mode=False):
+    def analyze_job_parallel(self, job_name, model, groq_api_key, rca_mode=False, enable_fallback=True):
         """Analyze a single job (helper for parallel processing)"""
         try:
             logs = self.get_job_logs(job_name, limit=1)
@@ -368,10 +674,26 @@ Provide:
 
             log_entry = logs[0]
             build_number = log_entry['build']
+            log_type = log_entry.get('log_type', 'console')
+
+            # Check if all tests passed (skip AI analysis to save credits)
+            if log_type == 'passed':
+                passed_tests = log_entry.get('passed_tests', 0)
+                total_tests = log_entry.get('total_tests', 0)
+                return {
+                    'job': job_name,
+                    'build': build_number,
+                    'analysis': f'✅ All tests passed ({passed_tests}/{total_tests} tests)',
+                    'log_size': 0,
+                    'status': 'passed',
+                    'passed_tests': passed_tests,
+                    'total_tests': total_tests
+                }
+
             log_text = log_entry['log']
 
             analysis = self.analyze_log_chunked(
-                log_text, job_name, build_number, model, groq_api_key, rca_mode
+                log_text, job_name, build_number, model, groq_api_key, rca_mode, enable_fallback
             )
 
             return {
@@ -398,6 +720,11 @@ def index():
 def dashboard():
     return render_template('dashboard.html')
 
+@app.route('/jira-guide')
+def jira_guide():
+    """Interactive step-by-step guide for Jira dashboard integration"""
+    return render_template('jira-guide.html')
+
 @app.route('/api/models', methods=['POST'])
 def fetch_models():
     try:
@@ -423,7 +750,10 @@ def fetch_models():
             # Exclude non-chat models
             if 'whisper' not in model_id.lower() and 'allam' not in model_id.lower():
                 # Prioritize these models (known to have better limits)
-                if any(x in model_id.lower() for x in ['llama-3.3-70b', 'llama-3.1-70b', 'mixtral-8x7b', 'gemma2-9b']):
+                # gpt-oss-120b is the default and should be first
+                if 'gpt-oss-120b' in model_id.lower():
+                    priority_models.insert(0, {'id': model_id, 'name': f"⭐ {model_id} (Default)"})
+                elif any(x in model_id.lower() for x in ['llama-3.3-70b', 'llama-3.1-70b', 'mixtral-8x7b', 'gemma2-9b']):
                     priority_models.append({'id': model_id, 'name': f"⭐ {model_id}"})
                 else:
                     chat_models.append({'id': model_id, 'name': model_id})
@@ -439,10 +769,13 @@ def analyze():
     data = request.json
     jenkins_url = data.get('jenkins_url')
     groq_api_key = data.get('groq_api_key')
-    model = data.get('model')
+    model = data.get('model', 'gpt-oss-120b')  # Default: gpt-oss-120b
     filter_failed = data.get('filter_failed', True)  # Default: only analyze failed jobs
     enable_rca = data.get('enable_rca', True)  # Default: enable RCA mode
+    enable_fallback = data.get('enable_fallback', True)  # Default: enable model fallback
     parallel_workers = data.get('parallel_workers', 3)  # Default: 3 parallel workers
+    specific_job = data.get('specific_job')  # Optional: analyze only this specific job
+    completed_jobs = data.get('completed_jobs', [])  # Optional: list of already-analyzed jobs to skip
 
     if not all([jenkins_url, groq_api_key, model]):
         return jsonify({'error': 'Missing required fields'}), 400
@@ -451,24 +784,35 @@ def analyze():
         try:
             analyzer = JenkinsAnalyzer(jenkins_url)
 
+            # Override specific_job if provided in request
+            analyze_single_job_only = False
+            if specific_job:
+                analyzer.specific_job = specific_job
+                analyze_single_job_only = True  # User explicitly selected a job - don't analyze pipeline
+
             # Determine which jobs to analyze
             jobs_to_analyze = []
 
             if analyzer.specific_job:
-                # Check if job is part of a pipeline
-                yield f"data: {json.dumps({'type': 'status', 'message': f'Checking pipeline for: {analyzer.specific_job}'})}\n\n"
-                pipeline_jobs = analyzer.get_pipeline_jobs(analyzer.specific_job)
-
-                if len(pipeline_jobs) > 1:
-                    # Multiple jobs in pipeline
-                    pipeline_name = analyzer.specific_job.rsplit('-', 1)[0]
-                    yield f"data: {json.dumps({'type': 'status', 'message': f'Found pipeline: {pipeline_name} with {len(pipeline_jobs)} jobs'})}\n\n"
-                    yield f"data: {json.dumps({'type': 'pipeline_info', 'pipeline': pipeline_name, 'job_count': len(pipeline_jobs)})}\n\n"
-                    jobs_to_analyze = pipeline_jobs
-                else:
-                    # Single job
-                    yield f"data: {json.dumps({'type': 'status', 'message': f'Analyzing single job: {analyzer.specific_job}'})}\n\n"
+                if analyze_single_job_only:
+                    # User explicitly selected a job - analyze ONLY this job, not the pipeline
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'Analyzing selected job only: {analyzer.specific_job}'})}\n\n"
                     jobs_to_analyze = [{'name': analyzer.specific_job}]
+                else:
+                    # Job from URL - check if it's part of a pipeline
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'Checking pipeline for: {analyzer.specific_job}'})}\n\n"
+                    pipeline_jobs = analyzer.get_pipeline_jobs(analyzer.specific_job)
+
+                    if len(pipeline_jobs) > 1:
+                        # Multiple jobs in pipeline
+                        pipeline_name = analyzer.specific_job.rsplit('-', 1)[0]
+                        yield f"data: {json.dumps({'type': 'status', 'message': f'Found pipeline: {pipeline_name} with {len(pipeline_jobs)} jobs'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'pipeline_info', 'pipeline': pipeline_name, 'job_count': len(pipeline_jobs)})}\n\n"
+                        jobs_to_analyze = pipeline_jobs
+                    else:
+                        # Single job
+                        yield f"data: {json.dumps({'type': 'status', 'message': f'Analyzing single job: {analyzer.specific_job}'})}\n\n"
+                        jobs_to_analyze = [{'name': analyzer.specific_job}]
             else:
                 # All jobs from base URL - with smart filtering
                 if filter_failed:
@@ -493,6 +837,19 @@ def analyze():
                 jobs_to_analyze = all_jobs
                 yield f"data: {json.dumps({'type': 'status', 'message': f'Found {len(jobs_to_analyze)} jobs. Starting parallel analysis...'})}\n\n"
 
+            # Filter out already-completed jobs (for retry functionality)
+            if completed_jobs:
+                original_count = len(jobs_to_analyze)
+                jobs_to_analyze = [job for job in jobs_to_analyze if job.get('name') not in completed_jobs]
+                skipped_count = original_count - len(jobs_to_analyze)
+
+                if skipped_count > 0:
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'🔄 Resuming analysis: Skipping {skipped_count} already-completed jobs, analyzing {len(jobs_to_analyze)} remaining jobs'})}\n\n"
+
+                if len(jobs_to_analyze) == 0:
+                    yield f"data: {json.dumps({'type': 'complete', 'message': 'All jobs already analyzed!'})}\n\n"
+                    return
+
             # Parallel analysis with ThreadPoolExecutor
             if len(jobs_to_analyze) > 1 and parallel_workers > 1:
                 yield f"data: {json.dumps({'type': 'status', 'message': f'🚀 Using {parallel_workers} parallel workers for 10x faster analysis'})}\n\n"
@@ -500,7 +857,7 @@ def analyze():
                 with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
                     # Submit all jobs for parallel processing
                     future_to_job = {
-                        executor.submit(analyzer.analyze_job_parallel, job.get('name'), model, groq_api_key, enable_rca): job
+                        executor.submit(analyzer.analyze_job_parallel, job.get('name'), model, groq_api_key, enable_rca, enable_fallback): job
                         for job in jobs_to_analyze if job.get('name')
                     }
 
@@ -515,9 +872,25 @@ def analyze():
                         try:
                             result = future.result()
                             mode_label = "🔬 RCA" if enable_rca else "📊 Analysis"
-                            yield f"data: {json.dumps({'type': 'job_result', 'job': result['job'], 'build': result['build'], 'analysis': result['analysis'], 'log_size': result.get('log_size', 0), 'mode': mode_label})}\n\n"
+                            # Properly encode the result to avoid JSON parsing errors
+                            result_data = {
+                                'type': 'job_result',
+                                'job': result['job'],
+                                'build': result['build'],
+                                'analysis': result['analysis'],
+                                'log_size': result.get('log_size', 0),
+                                'mode': mode_label
+                            }
+                            yield f"data: {json.dumps(result_data, ensure_ascii=False)}\n\n"
                         except Exception as e:
-                            yield f"data: {json.dumps({'type': 'job_result', 'job': job_name, 'build': 'N/A', 'analysis': f'Error: {str(e)}', 'log_size': 0})}\n\n"
+                            error_data = {
+                                'type': 'job_result',
+                                'job': job_name,
+                                'build': 'N/A',
+                                'analysis': f'Error: {str(e)}',
+                                'log_size': 0
+                            }
+                            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
             else:
                 # Sequential analysis for single job or when parallel is disabled
                 for idx, job in enumerate(jobs_to_analyze):
@@ -527,9 +900,18 @@ def analyze():
 
                     yield f"data: {json.dumps({'type': 'progress', 'current': idx + 1, 'total': len(jobs_to_analyze), 'job': job_name})}\n\n"
 
-                    result = analyzer.analyze_job_parallel(job_name, model, groq_api_key, enable_rca)
+                    result = analyzer.analyze_job_parallel(job_name, model, groq_api_key, enable_rca, enable_fallback)
                     mode_label = "🔬 RCA" if enable_rca else "📊 Analysis"
-                    yield f"data: {json.dumps({'type': 'job_result', 'job': result['job'], 'build': result['build'], 'analysis': result['analysis'], 'log_size': result.get('log_size', 0), 'mode': mode_label})}\n\n"
+                    # Properly encode the result to avoid JSON parsing errors
+                    result_data = {
+                        'type': 'job_result',
+                        'job': result['job'],
+                        'build': result['build'],
+                        'analysis': result['analysis'],
+                        'log_size': result.get('log_size', 0),
+                        'mode': mode_label
+                    }
+                    yield f"data: {json.dumps(result_data, ensure_ascii=False)}\n\n"
 
             yield f"data: {json.dumps({'type': 'complete', 'message': 'Analysis complete!'})}\n\n"
 
@@ -773,6 +1155,737 @@ def jira_formatted_results(tracking_id):
 	    'jira_adf': adf_document,
 	    'plain_text_summary': f"Analyzed {len(results)} job(s)" + (f" in pipeline '{task.get('pipeline', {}).get('name')}'" if task.get('pipeline') else "")
 	})
+
+
+def extract_error_keywords(analysis_text):
+	"""Extract key error terms from analysis for Jira search (no AI, just text extraction)."""
+	if not analysis_text:
+		return []
+
+	keywords = []
+	analysis_lower = analysis_text.lower()
+
+	# Extract important phrases (2-4 words) that might be in Jira tickets
+	import re
+
+	# Look for key technical terms (2-4 word phrases)
+	# Common error patterns
+	common_phrases = [
+		r'(timeout|connection|network|storage|backend|database|server|service)\s+\w+',
+		r'\w+\s+(error|failure|failed|exception|issue)',
+		r'(cannot|unable to|failed to)\s+\w+',
+	]
+
+	for pattern in common_phrases:
+		matches = re.findall(pattern, analysis_lower, re.IGNORECASE)
+		for match in matches[:3]:
+			if isinstance(match, tuple):
+				match = ' '.join(match)
+			clean = match.strip()
+			# Only keep phrases between 6-30 chars (not too short, not too long)
+			if 6 <= len(clean) <= 30 and clean not in keywords:
+				keywords.append(clean)
+
+	# Also extract specific error codes or test names
+	specific_patterns = [
+		r'test[_\s]+([a-z0-9_]{5,20})',  # test names
+		r'error[:\s]+([a-z0-9_\s]{5,30})',  # error messages
+	]
+
+	for pattern in specific_patterns:
+		matches = re.findall(pattern, analysis_lower, re.IGNORECASE)
+		for match in matches[:2]:
+			clean = match.strip()
+			if 5 <= len(clean) <= 30 and clean not in keywords:
+				keywords.append(clean)
+
+	return keywords[:5]  # Return max 5 keywords
+
+
+def search_jira_for_similar_issues(jira_url, jira_pat, error_keywords, max_results=3):
+	"""Search Jira for similar issues using error keywords (simple text search, no AI)."""
+	if not error_keywords or not jira_url or not jira_pat:
+		return []
+
+	try:
+		# Use Jira search API with JQL
+		search_url = f"{jira_url}/rest/api/2/search"
+		headers = {
+		    "Authorization": f"Bearer {jira_pat}",
+		    "Content-Type": "application/json"
+		}
+
+		# Build JQL query - search in summary and description
+		# Only use keywords that are likely to be meaningful (6-30 chars)
+		valid_keywords = [kw for kw in error_keywords[:3] if 6 <= len(kw) <= 30]
+
+		if not valid_keywords:
+			return []
+
+		# Use text search (searches summary, description, comments)
+		# This is more comprehensive than just summary search
+		search_terms = ' OR '.join([f'text ~ "{kw}"' for kw in valid_keywords])
+
+		# Don't filter by status - show all tickets (even resolved ones might be helpful)
+		# Just order by most recent
+		jql = f"({search_terms}) ORDER BY updated DESC"
+
+		params = {
+		    'jql': jql,
+		    'maxResults': max_results,
+		    'fields': 'key,summary,status'
+		}
+
+		response = requests.get(search_url, headers=headers, params=params, timeout=10)
+
+		# Check if response is JSON (not HTML error page)
+		content_type = response.headers.get('Content-Type', '')
+		if 'application/json' not in content_type:
+			app.logger.warning(f"Jira search returned non-JSON response: {content_type}")
+			return []
+
+		if response.status_code == 200:
+			data = response.json()
+			issues = data.get('issues', [])
+
+			results = []
+			for issue in issues:
+				results.append({
+				    'key': issue.get('key'),
+				    'summary': issue.get('fields', {}).get('summary', 'No summary'),
+				    'status': issue.get('fields', {}).get('status', {}).get('name', 'Unknown')
+				})
+
+			return results
+		else:
+			app.logger.warning(f"Jira search failed: {response.status_code}")
+			return []
+
+	except Exception as e:
+		app.logger.warning(f"Error searching Jira for similar issues: {str(e)}")
+		return []
+
+
+def build_robot_framework_links(jenkins_base_url, job_name, build_number):
+	"""Build Robot Framework report links for a Jenkins job."""
+	if not jenkins_base_url or not job_name or not build_number:
+		return []
+
+	# Extract base Jenkins URL (remove /job/... if present)
+	if '/job/' in jenkins_base_url:
+		jenkins_base_url = jenkins_base_url.split('/job/')[0]
+
+	jenkins_base_url = jenkins_base_url.rstrip('/')
+
+	# Build the links
+	links = []
+
+	# Robot Framework log.html
+	log_url = f"{jenkins_base_url}/job/{job_name}/{build_number}/robot/report/log.html"
+	links.append({
+		'label': 'Robot Framework Log',
+		'url': log_url
+	})
+
+	# Robot Framework report directory
+	report_url = f"{jenkins_base_url}/job/{job_name}/{build_number}/robot/"
+	links.append({
+		'label': 'Robot Framework Reports',
+		'url': report_url
+	})
+
+	# Console output
+	console_url = f"{jenkins_base_url}/job/{job_name}/{build_number}/console"
+	links.append({
+		'label': 'Console Output',
+		'url': console_url
+	})
+
+	return links
+
+
+def extract_main_failure_summary(analysis_text):
+	"""Extract a 2-3 line summary of the main failure from analysis text."""
+	if not analysis_text:
+		return "No analysis available", "Unable to determine - please review attached analysis"
+
+	# Split into lines and look for key failure indicators
+	lines = analysis_text.split('\n')
+	summary_lines = []
+	suggested_action = "Unable to determine - please review attached analysis"
+
+	# For multi-section analyses, find ALL root cause sections and pick the best one
+	# Skip sections that say "unable to determine" or "unclear"
+	all_root_causes = []
+
+	for i, line in enumerate(lines):
+		line_lower = line.lower().strip()
+		if any(keyword in line_lower for keyword in ['root cause', 'main issue', 'primary failure', 'primary reason', 'key problem', 'failure reason']):
+			# Extract this section (up to 5 lines)
+			section = []
+			section.append(line.strip())
+			for j in range(1, 6):
+				if i + j < len(lines) and lines[i + j].strip():
+					section.append(lines[i + j].strip())
+				else:
+					break
+
+			# Check if this section is useful (not "unable to determine")
+			section_text = ' '.join(section).lower()
+			if not any(skip_word in section_text for skip_word in ['unable to determine', 'unclear', 'cannot be identified', 'not visible', 'missing', 'insufficient']):
+				all_root_causes.append(section)
+
+	# Pick the best root cause section (prefer later sections which often have more detail)
+	if all_root_causes:
+		# Use the last good root cause section (usually the most detailed)
+		best_section = all_root_causes[-1]
+		summary_lines = best_section[:3]  # Take first 3 lines
+
+	# If no good root cause found, look for error messages
+	if not summary_lines:
+		for i, line in enumerate(lines):
+			line_lower = line.lower().strip()
+			if any(keyword in line_lower for keyword in ['error:', 'failed:', 'failure:', 'exception:', 'cannot connect', 'connection refused']):
+				summary_lines.append(line.strip())
+				if i + 1 < len(lines) and lines[i + 1].strip():
+					summary_lines.append(lines[i + 1].strip())
+				if len(summary_lines) >= 3:
+					break
+
+	# If still nothing, take first 2-3 meaningful lines
+	if not summary_lines:
+		for line in lines[:10]:  # Check first 10 lines
+			if line.strip() and not line.strip().startswith('#') and len(line.strip()) > 20:
+				summary_lines.append(line.strip())
+				if len(summary_lines) >= 3:
+					break
+
+	# Extract suggested action from analysis
+	# Check the summary first (more specific), then the full analysis
+	summary_text = ' '.join(summary_lines).lower() if summary_lines else ''
+	analysis_lower = analysis_text.lower()
+
+	# Priority order: specific issues first, then generic
+	# Check for cluster/connection issues (very specific)
+	if any(keyword in summary_text or keyword in analysis_lower for keyword in ['connection refused', 'cannot connect', 'cluster failed', 'transport endpoint', 'pacemaker', 'corosync']):
+		suggested_action = "Infrastructure issue - check cluster/network connectivity"
+	# Check for other infrastructure issues
+	elif any(keyword in summary_text or keyword in analysis_lower for keyword in ['infrastructure', 'network', 'timeout', 'connection']):
+		suggested_action = "Infrastructure issue - contact DevOps/SRE"
+	# Check for configuration issues
+	elif any(keyword in summary_text or keyword in analysis_lower for keyword in ['configuration', 'config', 'setup', 'environment']):
+		suggested_action = "Check configuration/environment setup"
+	# Check for code defects
+	elif any(keyword in summary_text or keyword in analysis_lower for keyword in ['bug', 'defect', 'code issue', 'regression', 'broken']):
+		suggested_action = "Create bug - code defect identified"
+	# Check for test issues
+	elif any(keyword in summary_text or keyword in analysis_lower for keyword in ['test issue', 'test code', 'test script', 'assertion']):
+		suggested_action = "Fix test code/script"
+	# Check for transient issues
+	elif any(keyword in summary_text or keyword in analysis_lower for keyword in ['retest', 're-test', 'retry', 'run again', 'transient', 'intermittent', 'flaky']):
+		suggested_action = "Retest - appears to be transient/intermittent issue"
+	# Check for unclear cases
+	elif any(keyword in summary_text or keyword in analysis_lower for keyword in ['unclear', 'uncertain', 'not sure', 'unable to determine', 'insufficient']):
+		suggested_action = "Manual investigation needed - unclear from logs"
+
+	# Limit to 3 lines max
+	summary = ' '.join(summary_lines[:3]) if summary_lines else "Analysis available in attached file"
+	return summary, suggested_action
+
+
+def build_jira_adf_comment(analysis_results):
+	"""Build Atlassian Document Format (ADF) comment for Jira API v3."""
+	adf_content = []
+
+	# Header
+	adf_content.append({
+	    "type": "heading",
+	    "attrs": {"level": 2},
+	    "content": [{"type": "text", "text": "Jenkins Build Analysis Summary"}]
+	})
+
+	# Main failure summary and suggested action
+	if analysis_results:
+		main_summary, suggested_action = extract_main_failure_summary(analysis_results[0].get('analysis', ''))
+		adf_content.append({
+		    "type": "paragraph",
+		    "content": [
+		        {"type": "text", "text": "Main Failure: ", "marks": [{"type": "strong"}]},
+		        {"type": "text", "text": main_summary}
+		    ]
+		})
+		adf_content.append({
+		    "type": "paragraph",
+		    "content": [
+		        {"type": "text", "text": "Suggested Action: ", "marks": [{"type": "strong"}]},
+		        {"type": "text", "text": suggested_action}
+		    ]
+		})
+
+	# Summary
+	adf_content.append({
+	    "type": "paragraph",
+	    "content": [
+	        {"type": "text", "text": f"Total jobs analyzed: {len(analysis_results)}", "marks": [{"type": "strong"}]}
+	    ]
+	})
+
+	# Table header
+	table_rows = []
+	table_rows.append({
+	    "type": "tableRow",
+	    "content": [
+	        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Job"}]}]},
+	        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Build"}]}]},
+	        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Main Issue"}]}]}
+	    ]
+	})
+
+	# Table rows
+	for result in analysis_results:
+		job_name = result.get('job') or 'Unknown'
+		build = str(result.get('build', 'N/A'))
+		main_issue, _ = extract_main_failure_summary(result.get('analysis', ''))
+		if len(main_issue) > 100:
+			main_issue = main_issue[:97] + "..."
+
+		table_rows.append({
+		    "type": "tableRow",
+		    "content": [
+		        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": job_name}]}]},
+		        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": build}]}]},
+		        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": main_issue}]}]}
+		    ]
+		})
+
+	adf_content.append({"type": "table", "content": table_rows})
+
+	# Note about attachments
+	adf_content.append({
+	    "type": "paragraph",
+	    "content": [
+	        {"type": "text", "text": "Detailed analysis attached as files", "marks": [{"type": "em"}]}
+	    ]
+	})
+
+	# Footer
+	adf_content.append({"type": "rule"})
+	adf_content.append({
+	    "type": "paragraph",
+	    "content": [
+	        {"type": "text", "text": "Analyzed by Jenkins Log Analyzer powered by Groq AI", "marks": [{"type": "em"}]}
+	    ]
+	})
+
+	return {
+	    "version": 1,
+	    "type": "doc",
+	    "content": adf_content
+	}
+
+
+def build_jira_adf_comment_with_search(analysis_results, jira_url, jira_pat):
+	"""Build ADF comment with similar issue search (for API v3)."""
+	# Start with base ADF comment
+	adf_content = []
+
+	# Header
+	adf_content.append({
+	    "type": "heading",
+	    "attrs": {"level": 2},
+	    "content": [{"type": "text", "text": "Jenkins Build Analysis Summary"}]
+	})
+
+	# Main failure summary and suggested action
+	if analysis_results:
+		main_summary, suggested_action = extract_main_failure_summary(analysis_results[0].get('analysis', ''))
+		adf_content.append({
+		    "type": "paragraph",
+		    "content": [
+		        {"type": "text", "text": "Main Failure: ", "marks": [{"type": "strong"}]},
+		        {"type": "text", "text": main_summary}
+		    ]
+		})
+		adf_content.append({
+		    "type": "paragraph",
+		    "content": [
+		        {"type": "text", "text": "Suggested Action: ", "marks": [{"type": "strong"}]},
+		        {"type": "text", "text": suggested_action}
+		    ]
+		})
+
+	# Summary
+	adf_content.append({
+	    "type": "paragraph",
+	    "content": [
+	        {"type": "text", "text": f"Total jobs analyzed: {len(analysis_results)}", "marks": [{"type": "strong"}]}
+	    ]
+	})
+
+	# Table
+	table_rows = []
+	table_rows.append({
+	    "type": "tableRow",
+	    "content": [
+	        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Job"}]}]},
+	        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Build"}]}]},
+	        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Main Issue"}]}]}
+	    ]
+	})
+
+	for result in analysis_results:
+		job_name = result.get('job') or 'Unknown'
+		build = str(result.get('build', 'N/A'))
+		main_issue, _ = extract_main_failure_summary(result.get('analysis', ''))
+		if len(main_issue) > 100:
+			main_issue = main_issue[:97] + "..."
+
+		table_rows.append({
+		    "type": "tableRow",
+		    "content": [
+		        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": job_name}]}]},
+		        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": build}]}]},
+		        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": main_issue}]}]}
+		    ]
+		})
+
+	adf_content.append({"type": "table", "content": table_rows})
+
+	# Note about attachments
+	adf_content.append({
+	    "type": "paragraph",
+	    "content": [
+	        {"type": "text", "text": "Detailed analysis attached as files", "marks": [{"type": "em"}]}
+	    ]
+	})
+
+	# Search for similar issues (wrapped in try-except to not break comment posting)
+	try:
+		if analysis_results:
+			first_analysis = analysis_results[0].get('analysis', '')
+			error_keywords = extract_error_keywords(first_analysis)
+
+			if error_keywords:
+				similar_issues = search_jira_for_similar_issues(jira_url, jira_pat, error_keywords, max_results=3)
+
+				if similar_issues:
+					adf_content.append({
+					    "type": "heading",
+					    "attrs": {"level": 3},
+					    "content": [{"type": "text", "text": "Possibly Related Jira Tickets"}]
+					})
+
+					adf_content.append({
+					    "type": "paragraph",
+					    "content": [
+					        {"type": "text", "text": "Found based on error text matching (not AI-based):", "marks": [{"type": "em"}]}
+					    ]
+					})
+
+					# Bullet list of similar issues
+					bullet_items = []
+					for issue in similar_issues:
+						issue_key = issue.get('key', 'Unknown')
+						issue_summary = issue.get('summary', 'No summary')
+						issue_status = issue.get('status', 'Unknown')
+
+						if len(issue_summary) > 80:
+							issue_summary = issue_summary[:77] + "..."
+
+						bullet_items.append({
+						    "type": "listItem",
+						    "content": [{
+						        "type": "paragraph",
+						        "content": [
+						            {"type": "text", "text": issue_key, "marks": [{"type": "link", "attrs": {"href": f"{jira_url}/browse/{issue_key}"}}]},
+						            {"type": "text", "text": f" - {issue_summary} "},
+						            {"type": "text", "text": f"(Status: {issue_status})", "marks": [{"type": "em"}]}
+						        ]
+						    }]
+						})
+
+					adf_content.append({"type": "bulletList", "content": bullet_items})
+
+					adf_content.append({
+					    "type": "paragraph",
+					    "content": [
+					        {"type": "text", "text": "Review these tickets to see if the issue is already known or has a solution.", "marks": [{"type": "em"}]}
+					    ]
+					})
+	except Exception as e:
+		# If search fails, just continue without similar issues section
+		pass
+
+	# Footer
+	adf_content.append({"type": "rule"})
+	adf_content.append({
+	    "type": "paragraph",
+	    "content": [
+	        {"type": "text", "text": "Analyzed by Jenkins Log Analyzer powered by Groq AI", "marks": [{"type": "em"}]}
+	    ]
+	})
+
+	return {
+	    "version": 1,
+	    "type": "doc",
+	    "content": adf_content
+	}
+
+
+@app.route('/api/post-to-jira', methods=['POST'])
+def post_to_jira():
+		"""Post analysis results directly to a Jira ticket using a Jira PAT.
+
+		Expected JSON body:
+		{
+		  "jira_url": "https://your-company.atlassian.net",
+		  "jira_ticket": "PROJ-123",
+		  "jira_pat": "<personal-access-token>",
+		  "analysis_results": [ ... ]  # Same structure as UI results
+		}
+		"""
+		data = request.json or {}
+		jira_url = (data.get('jira_url') or '').strip()
+		jira_ticket = (data.get('jira_ticket') or '').strip()
+		jira_pat = data.get('jira_pat') or ''
+		analysis_results = data.get('analysis_results') or []
+		jenkins_url = (data.get('jenkins_url') or '').strip()  # Jenkins URL for Robot links
+		api_version = data.get('api_version', '2')  # Default to v2
+		attach_logs = data.get('attach_logs', False)  # Attach AI analysis files
+		attach_raw_logs = data.get('attach_raw_logs', False)  # Attach raw console logs
+
+		if not jira_url or not jira_ticket or not jira_pat:
+			return jsonify({'error': 'Missing required fields: jira_url, jira_ticket, jira_pat'}), 400
+
+		if not isinstance(analysis_results, list) or not analysis_results:
+			return jsonify({'error': 'No analysis_results to post'}), 400
+
+		# Normalize Jira base URL (remove trailing slash)
+		jira_url = jira_url.rstrip('/')
+
+		# Normalize Jenkins URL (remove trailing slash)
+		if jenkins_url:
+			jenkins_url = jenkins_url.rstrip('/')
+
+		# Determine if we should use ADF (v3) or plain text (v2)
+		use_adf = (api_version == '3')
+
+		if use_adf:
+			# Build ADF format for API v3 with similar issue search
+			comment_body = build_jira_adf_comment_with_search(analysis_results, jira_url, jira_pat)
+		else:
+			# Build simple text comment (Jira API v2 format) with table
+			comment_lines = []
+			comment_lines.append("h2. Jenkins Build Analysis Summary")
+			comment_lines.append("")
+
+			# Main failure summary and suggested action (from first job)
+			if analysis_results:
+				main_summary, suggested_action = extract_main_failure_summary(analysis_results[0].get('analysis', ''))
+				comment_lines.append("*Main Failure:* " + main_summary)
+				comment_lines.append("")
+				comment_lines.append("*Suggested Action:* " + suggested_action)
+				comment_lines.append("")
+
+			comment_lines.append(f"*Total jobs analyzed:* {len(analysis_results)}")
+			comment_lines.append("")
+
+			# Table format for job summary
+			comment_lines.append("|| Job || Build || Main Issue ||")
+			for result in analysis_results:
+				job_name = result.get('job') or 'Unknown'
+				build = result.get('build', 'N/A')
+				analysis_text = result.get('analysis', '')
+				main_issue, _ = extract_main_failure_summary(analysis_text)
+
+				# Truncate main issue for table (max 100 chars)
+				if len(main_issue) > 100:
+					main_issue = main_issue[:97] + "..."
+
+				comment_lines.append(f"| {job_name} | #{build} | {main_issue} |")
+
+			comment_lines.append("")
+			comment_lines.append("_Detailed analysis attached as files_")
+			comment_lines.append("")
+
+			# Search for similar Jira issues (simple text search, no AI)
+			# Wrapped in try-except to ensure it doesn't break comment posting
+			try:
+				if analysis_results:
+					# Extract error keywords from first analysis
+					first_analysis = analysis_results[0].get('analysis', '')
+					error_keywords = extract_error_keywords(first_analysis)
+
+					if error_keywords:
+						similar_issues = search_jira_for_similar_issues(jira_url, jira_pat, error_keywords, max_results=3)
+
+						if similar_issues:
+							comment_lines.append("h3. Possibly Related Jira Tickets")
+							comment_lines.append("")
+							comment_lines.append("_Found based on error text matching (not AI-based):_")
+							comment_lines.append("")
+
+							for issue in similar_issues:
+								issue_key = issue.get('key', 'Unknown')
+								issue_summary = issue.get('summary', 'No summary')
+								issue_status = issue.get('status', 'Unknown')
+
+								# Truncate summary if too long
+								if len(issue_summary) > 80:
+									issue_summary = issue_summary[:77] + "..."
+
+								comment_lines.append(f"* [{issue_key}|{jira_url}/browse/{issue_key}] - {issue_summary} _(Status: {issue_status})_")
+
+							comment_lines.append("")
+							comment_lines.append("_Review these tickets to see if the issue is already known or has a solution._")
+							comment_lines.append("")
+			except Exception as e:
+				app.logger.warning(f"Failed to search for similar Jira issues: {str(e)}")
+				# Continue without similar issues section
+
+			# Footer with attribution
+			comment_lines.append("----")
+			comment_lines.append("_Analyzed by Jenkins Log Analyzer powered by Groq AI_")
+
+			# Join all lines into a single comment body
+			comment_body = "\n".join(comment_lines)
+
+		# Prepare comment payload based on API version
+		if use_adf:
+			comment_payload = {"body": comment_body}  # ADF format already built
+		else:
+			comment_payload = {"body": comment_body}  # Plain text format
+
+		comment_url = f"{jira_url}/rest/api/{api_version}/issue/{jira_ticket}/comment"
+		headers = {
+		    "Authorization": f"Bearer {jira_pat}",
+		    "Accept": "application/json",
+		    "Content-Type": "application/json",
+		}
+
+		try:
+			resp = requests.post(comment_url, headers=headers, json=comment_payload, timeout=20)
+		except requests.RequestException as e:
+			app.logger.exception("Error posting analysis to Jira")
+			return jsonify({'error': f'Failed to connect to Jira: {str(e)}'}), 502
+
+		if resp.status_code not in (200, 201):
+			# Try to extract a useful error message from Jira's response
+			message = None
+			try:
+				err_json = resp.json()
+				if isinstance(err_json, dict):
+					if 'errorMessages' in err_json and err_json['errorMessages']:
+						message = '; '.join(err_json['errorMessages'])
+					elif 'message' in err_json:
+						message = err_json['message']
+			except ValueError:
+				pass
+
+			if not message:
+				message = resp.text[:500]
+
+			return jsonify({'error': f'Jira API returned {resp.status_code}: {message}'}), 400
+
+		try:
+			resp_json = resp.json()
+		except ValueError:
+			resp_json = {}
+
+		# Jira returns the comment ID in the response
+		comment_id = resp_json.get('id') or resp_json.get('self', '').split('/')[-1] or 'created'
+
+		# Attach AI analysis files if requested
+		attachments_info = []
+		if attach_logs:
+			for result in analysis_results:
+				analysis_text = result.get('analysis')  # Changed from log_content to analysis
+				job_name = result.get('job', 'unknown')
+				build = result.get('build', 'unknown')
+
+				if analysis_text:
+					try:
+						# Create filename for AI analysis
+						filename = f"{job_name.replace('/', '_')}_build_{build}_analysis.txt"
+
+						# Jira attachment API endpoint
+						attach_url = f"{jira_url}/rest/api/{api_version}/issue/{jira_ticket}/attachments"
+						attach_headers = {
+						    "Authorization": f"Bearer {jira_pat}",
+						    "X-Atlassian-Token": "no-check",  # Required for attachments
+						}
+
+						# Prepare file for upload
+						files = {
+						    'file': (filename, analysis_text.encode('utf-8'), 'text/plain')
+						}
+
+						attach_resp = requests.post(attach_url, headers=attach_headers, files=files, timeout=30)
+
+						if attach_resp.status_code in [200, 201]:
+							attach_json = attach_resp.json()
+							if isinstance(attach_json, list) and len(attach_json) > 0:
+								attachments_info.append({
+								    'filename': filename,
+								    'id': attach_json[0].get('id'),
+								    'size': attach_json[0].get('size')
+								})
+						else:
+							app.logger.warning(f"Failed to attach analysis for {job_name} build {build}: {attach_resp.status_code}")
+					except Exception as e:
+						app.logger.exception(f"Error attaching analysis file for {job_name} build {build}")
+
+		# Attach raw console/debug logs if requested (disabled by default)
+		if attach_raw_logs:
+			for result in analysis_results:
+				log_content = result.get('log_content')  # Raw Jenkins console log
+				job_name = result.get('job', 'unknown')
+				build = result.get('build', 'unknown')
+
+				if log_content:
+					try:
+						# Create filename for raw log
+						filename = f"{job_name.replace('/', '_')}_build_{build}_console.log"
+
+						# Jira attachment API endpoint
+						attach_url = f"{jira_url}/rest/api/{api_version}/issue/{jira_ticket}/attachments"
+						attach_headers = {
+						    "Authorization": f"Bearer {jira_pat}",
+						    "X-Atlassian-Token": "no-check",
+						}
+
+						# Prepare file for upload
+						files = {
+						    'file': (filename, log_content.encode('utf-8'), 'text/plain')
+						}
+
+						attach_resp = requests.post(attach_url, headers=attach_headers, files=files, timeout=30)
+
+						if attach_resp.status_code in [200, 201]:
+							attach_json = attach_resp.json()
+							if isinstance(attach_json, list) and len(attach_json) > 0:
+								attachments_info.append({
+								    'filename': filename,
+								    'id': attach_json[0].get('id'),
+								    'size': attach_json[0].get('size'),
+								    'type': 'raw_log'
+								})
+						else:
+							app.logger.warning(f"Failed to attach raw log for {job_name} build {build}: {attach_resp.status_code}")
+					except Exception as e:
+						app.logger.exception(f"Error attaching raw log file for {job_name} build {build}")
+
+		response_data = {
+		    'status': 'ok',
+		    'comment_id': comment_id,
+		    'jira_ticket': jira_ticket,
+		}
+
+		if attachments_info:
+			response_data['attachments'] = attachments_info
+			response_data['attachments_count'] = len(attachments_info)
+
+		return jsonify(response_data)
 
 
 @app.route('/api/batch-analyze', methods=['POST'])

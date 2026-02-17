@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jenkins Integration Guide - Step by Step</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; border-radius: 12px; padding: 40px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+        h1 { color: #335eea; margin-bottom: 10px; font-size: 2.5em; }
+        .subtitle { color: #666; margin-bottom: 30px; font-size: 1.2em; }
+        .step { background: #f8f9fa; border-left: 4px solid #335eea; padding: 25px; margin-bottom: 25px; border-radius: 8px; transition: all 0.3s; }
+        .step:hover { box-shadow: 0 4px 12px rgba(51, 94, 234, 0.2); transform: translateX(5px); }
+        .step-number { display: inline-block; background: #335eea; color: white; width: 40px; height: 40px; border-radius: 50%; text-align: center; line-height: 40px; font-weight: bold; margin-right: 15px; font-size: 1.2em; }
+        .step-title { font-size: 1.5em; color: #333; margin-bottom: 15px; display: flex; align-items: center; }
+        .step-content { margin-left: 55px; color: #555; line-height: 1.8; }
+        .code-block { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 6px; font-family: 'Consolas', 'Monaco', monospace; margin: 15px 0; overflow-x: auto; position: relative; }
+        .code-block code { display: block; white-space: pre; }
+        .copy-btn { position: absolute; top: 10px; right: 10px; background: #4caf50; color: white; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+        .copy-btn:hover { background: #45a049; }
+        .screenshot { width: 100%; border: 2px solid #ddd; border-radius: 8px; margin: 15px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .tip { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 15px 0; border-radius: 6px; }
+        .tip-icon { color: #ffc107; font-size: 1.2em; margin-right: 10px; }
+        .warning { background: #f8d7da; border-left: 4px solid #dc3545; padding: 15px; margin: 15px 0; border-radius: 6px; }
+        .warning-icon { color: #dc3545; font-size: 1.2em; margin-right: 10px; }
+        .success { background: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin: 15px 0; border-radius: 6px; }
+        .success-icon { color: #28a745; font-size: 1.2em; margin-right: 10px; }
+        .nav-buttons { display: flex; gap: 15px; margin-top: 30px; }
+        .btn { padding: 12px 30px; border: none; border-radius: 6px; cursor: pointer; font-size: 1em; font-weight: bold; transition: all 0.3s; text-decoration: none; display: inline-block; }
+        .btn-primary { background: #335eea; color: white; }
+        .btn-primary:hover { background: #2347c5; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(51, 94, 234, 0.3); }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover { background: #5a6268; }
+        .highlight { background: #ffeb3b; padding: 2px 6px; border-radius: 3px; font-weight: bold; }
+        .url-input { width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 6px; font-size: 1em; margin: 10px 0; font-family: 'Consolas', monospace; }
+        .url-input:focus { outline: none; border-color: #335eea; }
+        .interactive-box { background: white; border: 2px solid #335eea; padding: 20px; border-radius: 8px; margin: 15px 0; }
+        .checkbox-item { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 6px; }
+        .checkbox-item input[type="checkbox"] { width: 20px; height: 20px; cursor: pointer; }
+        .progress-bar { background: #e9ecef; height: 30px; border-radius: 15px; overflow: hidden; margin: 20px 0; }
+        .progress-fill { background: linear-gradient(90deg, #335eea, #667eea); height: 100%; width: 0%; transition: width 0.5s; text-align: center; line-height: 30px; color: white; font-weight: bold; }
+        .accordion { cursor: pointer; padding: 15px; background: #335eea; color: white; border: none; width: 100%; text-align: left; font-size: 1.1em; border-radius: 6px; margin: 10px 0; transition: all 0.3s; }
+        .accordion:hover { background: #2347c5; }
+        .accordion.active { background: #2347c5; }
+        .panel { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; background: #f8f9fa; }
+        .panel-content { padding: 20px; }
+        .video-placeholder { background: #000; color: white; padding: 100px 20px; text-align: center; border-radius: 8px; margin: 15px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Jira Dashboard Integration Guide</h1>
+        <p class="subtitle">Follow these simple steps to integrate Jenkins Log Analyzer into your Jira dashboard - so easy, even a kid can do it!</p>
+
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressBar">0%</div>
+        </div>
+
+        <!-- Step 1 -->
+        <div class="step" data-step="1">
+            <div class="step-title">
+                <span class="step-number">1</span>
+                <span>Get Your Groq API Key</span>
+            </div>
+            <div class="step-content">
+                <p>First, you need a free API key from Groq to power the AI analysis.</p>
+                
+                <div class="interactive-box">
+                    <h4>📝 Quick Steps:</h4>
+                    <ol style="margin-left: 20px; margin-top: 10px;">
+                        <li>Go to <a href="https://console.groq.com/" target="_blank" style="color: #335eea; font-weight: bold;">console.groq.com</a></li>
+                        <li>Sign up for a free account (takes 30 seconds)</li>
+                        <li>Click "API Keys" in the left sidebar</li>
+                        <li>Click "Create API Key"</li>
+                        <li>Copy your key and paste it below:</li>
+                    </ol>
+                    <input type="password" class="url-input" id="apiKeyInput" placeholder="Paste your Groq API key here...">
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="step1Check" onchange="updateProgress()">
+                        <label for="step1Check">✅ I have my API key</label>
+                    </div>
+                </div>
+
+                <div class="tip">
+                    <span class="tip-icon">💡</span>
+                    <strong>Pro Tip:</strong> Enable "Zero Data Retention" in Groq settings to ensure your logs are not stored.
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="step" data-step="2">
+            <div class="step-title">
+                <span class="step-number">2</span>
+                <span>Find Your Jenkins URL</span>
+            </div>
+            <div class="step-content">
+                <p>You need the URL of your Jenkins server. This is usually something like:</p>
+                
+                <div class="code-block">
+                    <code>https://jenkins.yourcompany.com
+or
+http://localhost:8080</code>
+                </div>
+
+                <div class="interactive-box">
+                    <h4>🔗 Enter Your Jenkins URL:</h4>
+                    <input type="text" class="url-input" id="jenkinsUrlInput" placeholder="https://jenkins.yourcompany.com">
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="step2Check" onchange="updateProgress()">
+                        <label for="step2Check">✅ I have my Jenkins URL</label>
+                    </div>
+                </div>
+
+                <div class="warning">
+                    <span class="warning-icon">⚠️</span>
+                    <strong>Important:</strong> Make sure your Jenkins server is accessible from where you're running this tool.
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="step" data-step="3">
+            <div class="step-title">
+                <span class="step-number">3</span>
+                <span>Create Jira Dashboard</span>
+            </div>
+            <div class="step-content">
+                <p>Now let's create a Jira dashboard to display Jenkins analysis results.</p>
+
+                <button class="accordion" onclick="toggleAccordion(this)">Option A: Using Jira Gadgets (Recommended)</button>
+                <div class="panel">
+                    <div class="panel-content">
+                        <h4>📊 Create Dashboard:</h4>
+                        <ol style="margin-left: 20px; margin-top: 10px;">
+                            <li>Go to Jira → Dashboards → Create dashboard</li>
+                            <li>Enter name: <span class="highlight">Jenkins CI/CD Analysis</span></li>
+                            <li>Click "Add" → "Add gadget"</li>
+                            <li>Search for "Iframe" or "External Content"</li>
+                            <li>Add the gadget and configure URL:</li>
+                        </ol>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard('iframeUrl')">Copy</button>
+                            <code id="iframeUrl">http://localhost:5000/?embedded=true</code>
+                        </div>
+                        <p style="margin-top: 10px;"><em>Replace localhost:5000 with your actual server address</em></p>
+
+                        <div class="tip">
+                            <span class="tip-icon">💡</span>
+                            <strong>Note:</strong> If "Iframe" gadget is not available, you may need to install the "Iframe Gadget" plugin from Atlassian Marketplace.
+                        </div>
+                    </div>
+                </div>
+
+                <button class="accordion" onclick="toggleAccordion(this)">Option B: Using Jira Automation (Advanced)</button>
+                <div class="panel">
+                    <div class="panel-content">
+                        <p>Set up Jira Automation to fetch analysis results daily and create issues:</p>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard('automationScript')">Copy</button>
+                            <code id="automationScript">// Jira Automation Rule
+// Trigger: Scheduled (Daily at 9 AM)
+// Action: Send web request
+
+URL: http://localhost:5000/api/batch-analyze
+Method: POST
+Headers: Content-Type: application/json
+Body:
+{
+  "jenkins_url": "https://your-jenkins.com",
+  "groq_api_key": "YOUR_GROQ_API_KEY",
+  "pipelines": ["pipeline1", "pipeline2"],
+  "model": "grok-3-oss-120b",
+  "filter_failed": true,
+  "enable_rca": true
+}
+
+// Then create a follow-up action to parse results
+// and create Jira issues for failures</code>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="accordion" onclick="toggleAccordion(this)">Option C: Using Confluence Page Embed (Easiest)</button>
+                <div class="panel">
+                    <div class="panel-content">
+                        <p>Create a Confluence page and embed the analyzer:</p>
+                        <ol style="margin-left: 20px; margin-top: 10px;">
+                            <li>Create a new Confluence page</li>
+                            <li>Click "+" → "Other macros" → "HTML"</li>
+                            <li>Paste this code:</li>
+                        </ol>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard('htmlEmbed')">Copy</button>
+                            <code id="htmlEmbed">&lt;iframe src="http://localhost:5000/"
+        style="width: 100%; height: 800px; border: 1px solid #ddd;"&gt;
+&lt;/iframe&gt;</code>
+                        </div>
+                        <p style="margin-top: 10px;">Then link this page from your Jira dashboard</p>
+                    </div>
+                </div>
+
+                <div class="checkbox-item">
+                    <input type="checkbox" id="step3Check" onchange="updateProgress()">
+                    <label for="step3Check">✅ I've set up the Jira dashboard</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="step" data-step="4">
+            <div class="step-title">
+                <span class="step-number">4</span>
+                <span>Configure Analysis Options</span>
+            </div>
+            <div class="step-content">
+                <p>Choose which features you want to enable for your analysis:</p>
+
+                <div class="interactive-box">
+                    <h4>⚙️ Recommended Settings:</h4>
+                    <div class="checkbox-item">
+                        <input type="checkbox" checked disabled>
+                        <label>🔍 <strong>Smart Filter:</strong> Only analyze failed/unstable jobs (saves 80% time)</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" checked disabled>
+                        <label>🔬 <strong>Root Cause Analysis:</strong> Deep dive into failures with actionable insights</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" checked disabled>
+                        <label>🚀 <strong>Parallel Processing:</strong> Analyze 3 jobs simultaneously (10x faster)</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" checked disabled>
+                        <label>🔄 <strong>Model Fallback:</strong> Auto-retry with different models on errors</label>
+                    </div>
+                </div>
+
+                <div class="success">
+                    <span class="success-icon">✅</span>
+                    <strong>Best Practice:</strong> Keep all options enabled for optimal results!
+                </div>
+
+                <div class="checkbox-item">
+                    <input type="checkbox" id="step4Check" onchange="updateProgress()">
+                    <label for="step4Check">✅ I understand the configuration options</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5 -->
+        <div class="step" data-step="5">
+            <div class="step-title">
+                <span class="step-number">5</span>
+                <span>Test Your Integration</span>
+            </div>
+            <div class="step-content">
+                <p>Let's make sure everything works!</p>
+
+                <div class="interactive-box">
+                    <h4>🧪 Testing Checklist:</h4>
+                    <ol style="margin-left: 20px; margin-top: 10px;">
+                        <li>Open your Jira dashboard</li>
+                        <li>Navigate to the Jenkins CI/CD Analysis dashboard</li>
+                        <li>In the embedded analyzer, enter your Groq API key</li>
+                        <li>Click "Fetch Available Models"</li>
+                        <li>Select <span class="highlight">grok-3-oss-120b</span> (default)</li>
+                        <li>Enter your Jenkins URL</li>
+                        <li>Click "Start Analysis"</li>
+                        <li>Watch the magic happen! ✨</li>
+                    </ol>
+                </div>
+
+                <div class="tip">
+                    <span class="tip-icon">💡</span>
+                    <strong>First Time?</strong> Start with a small Jenkins instance (< 20 jobs) to see how it works.
+                </div>
+
+                <div class="checkbox-item">
+                    <input type="checkbox" id="step5Check" onchange="updateProgress()">
+                    <label for="step5Check">✅ Integration is working!</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 6 -->
+        <div class="step" data-step="6">
+            <div class="step-title">
+                <span class="step-number">6</span>
+                <span>Automate Daily Analysis (Optional)</span>
+            </div>
+            <div class="step-content">
+                <p>Set up automatic daily analysis and post results to Jira!</p>
+
+                <button class="accordion" onclick="toggleAccordion(this)">Using Jira Automation Rules</button>
+                <div class="panel">
+                    <div class="panel-content">
+                        <h4>📅 Create Automation Rule:</h4>
+                        <ol style="margin-left: 20px; margin-top: 10px;">
+                            <li>Go to Jira → Settings → System → Automation rules</li>
+                            <li>Click "Create rule"</li>
+                            <li>Trigger: <span class="highlight">Scheduled</span> → Daily at 9:00 AM</li>
+                            <li>Action: <span class="highlight">Send web request</span></li>
+                            <li>Configure the request:</li>
+                        </ol>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard('jiraAutomation')">Copy</button>
+                            <code id="jiraAutomation">URL: http://localhost:5000/api/batch-analyze
+Method: POST
+Headers:
+  Content-Type: application/json
+Body:
+{
+  "jenkins_url": "https://your-jenkins.com",
+  "groq_api_key": "YOUR_GROQ_API_KEY",
+  "pipelines": ["pipeline1", "pipeline2", "pipeline3"],
+  "model": "grok-3-oss-120b",
+  "filter_failed": true,
+  "enable_rca": true,
+  "enable_fallback": true,
+  "parallel_workers": 3
+}</code>
+                        </div>
+                        <p style="margin-top: 15px;"><strong>💡 Pro Tip:</strong> Store your Groq API key in Jira secrets for security!</p>
+                    </div>
+                </div>
+
+                <button class="accordion" onclick="toggleAccordion(this)">Using Cron Job + API</button>
+                <div class="panel">
+                    <div class="panel-content">
+                        <p>Set up a cron job on your server to run daily analysis:</p>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard('cronScript')">Copy</button>
+                            <code id="cronScript">#!/bin/bash
+# Save as: /usr/local/bin/jenkins-daily-analysis.sh
+# Add to crontab: 0 9 * * * /usr/local/bin/jenkins-daily-analysis.sh
+
+RESULTS=$(curl -X POST http://localhost:5000/api/batch-analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jenkins_url": "https://your-jenkins.com",
+    "groq_api_key": "YOUR_API_KEY",
+    "pipelines": ["pipeline1", "pipeline2"],
+    "model": "grok-3-oss-120b",
+    "filter_failed": true,
+    "enable_rca": true,
+    "enable_fallback": true,
+    "parallel_workers": 3
+  }')
+
+# Save results
+echo "$RESULTS" > /var/log/jenkins-analysis-$(date +%Y%m%d).json
+
+# View in dashboard at: http://localhost:5000/dashboard
+echo "✅ Analysis complete! View at: http://localhost:5000/dashboard"</code>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="checkbox-item">
+                    <input type="checkbox" id="step6Check" onchange="updateProgress()">
+                    <label for="step6Check">✅ Automation configured (optional)</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <div class="nav-buttons">
+            <a href="/" class="btn btn-primary">🏠 Back to Analyzer</a>
+            <button class="btn btn-secondary" onclick="window.print()">🖨️ Print Guide</button>
+            <button class="btn btn-primary" onclick="testIntegration()">🧪 Test Integration</button>
+        </div>
+
+        <div class="success" style="margin-top: 30px;">
+            <span class="success-icon">🎉</span>
+            <strong>Congratulations!</strong> You've successfully integrated Jenkins Log Analyzer. Need help? Check the <a href="https://github.com/ScienceArtist/jenkins-log-analyzer" target="_blank" style="color: #335eea;">GitHub repository</a> or open an issue.
+        </div>
+    </div>
+
+    <script>
+        function updateProgress() {
+            const checks = ['step1Check', 'step2Check', 'step3Check', 'step4Check', 'step5Check'];
+            const completed = checks.filter(id => document.getElementById(id).checked).length;
+            const total = checks.length;
+            const percentage = Math.round((completed / total) * 100);
+
+            const progressBar = document.getElementById('progressBar');
+            progressBar.style.width = percentage + '%';
+            progressBar.textContent = percentage + '%';
+        }
+
+        function toggleAccordion(element) {
+            element.classList.toggle('active');
+            const panel = element.nextElementSibling;
+            if (panel.style.maxHeight) {
+                panel.style.maxHeight = null;
+            } else {
+                panel.style.maxHeight = panel.scrollHeight + 'px';
+            }
+        }
+
+        function copyToClipboard(elementId) {
+            const text = document.getElementById(elementId).textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('✅ Copied to clipboard!');
+            });
+        }
+
+        function testIntegration() {
+            const apiKey = document.getElementById('apiKeyInput').value;
+            const jenkinsUrl = document.getElementById('jenkinsUrlInput').value;
+
+            if (!apiKey || !jenkinsUrl) {
+                alert('⚠️ Please enter your API key and Jenkins URL first!');
+                return;
+            }
+
+            const testUrl = `/?groq_api_key=${encodeURIComponent(apiKey)}&jenkins_url=${encodeURIComponent(jenkinsUrl)}&model=grok-3-oss-120b`;
+            window.open(testUrl, '_blank');
+        }
+    </script>
+</body>
+</html>
+

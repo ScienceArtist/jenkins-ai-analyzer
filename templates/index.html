@@ -157,30 +157,42 @@
     <div class="container">
         <h1>🔍 Jenkins Log Analyzer</h1>
         <p class="subtitle">AI-powered analysis with real-time streaming results</p>
-        
+
+        <div style="text-align: right; margin-bottom: 15px;">
+            <button onclick="clearCredentials()" style="width: auto; padding: 8px 16px; background: #dc3545; font-size: 14px;">🗑️ Clear Saved Credentials</button>
+        </div>
+
         <div class="step">
             <h2>Step 1: Enter Groq API Key</h2>
-            <input type="password" id="groqApiKey" placeholder="Enter your Groq API key">
+            <input type="password" id="groqApiKey" placeholder="Enter your Groq API key" onchange="saveCredentials()">
             <button onclick="fetchModels()">Fetch Available Models</button>
             <small style="color: #dc3545; margin-top: 10px; display: block;">⚠️ <a href="#" onclick="showDataProtectionModal(); return false;" style="color: #dc3545; text-decoration: underline;">Important: Enable Zero Data Retention in Groq</a></small>
         </div>
-        
+
         <div class="step">
             <h2>Step 2: Select Model</h2>
             <select id="modelSelect" disabled>
                 <option value="">First fetch models...</option>
             </select>
         </div>
-        
+
         <div class="step">
             <h2>Step 3: Enter Jenkins URL</h2>
-            <input type="text" id="jenkinsUrl" placeholder="https://your-jenkins-server.com or https://jenkins.com/job/JobName/">
+            <input type="text" id="jenkinsUrl" placeholder="https://your-jenkins-server.com or https://jenkins.com/job/JobName/" onchange="saveCredentials()">
             <small style="color: #666;">💡 Tip: Use base URL to analyze all jobs, or job-specific URL for single job</small>
         </div>
 
         <div class="step">
             <h2>Step 4: Analysis Options</h2>
             <div style="margin: 15px 0;">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px; background: white; border-radius: 8px; margin-bottom: 10px;">
+                    <input type="checkbox" id="analyzeSelectedOnly" style="width: auto; margin: 0;" onchange="toggleSelectedJobInput()">
+                    <span><strong>🎯 Analyze Selected Job Only:</strong> Analyze ONLY the specific job (skip pipeline detection)</span>
+                </label>
+                <div id="selectedJobInputContainer" style="display: none; margin-left: 30px; margin-bottom: 10px;">
+                    <input type="text" id="selectedJobName" placeholder="Enter job name (e.g., my-test-job)" style="margin: 0;">
+                    <small style="color: #666; display: block; margin-top: 5px;">💡 Enter the exact job name - will NOT analyze the entire pipeline</small>
+                </div>
                 <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px; background: white; border-radius: 8px; margin-bottom: 10px;">
                     <input type="checkbox" id="filterFailed" checked style="width: auto; margin: 0;">
                     <span><strong>🔍 Smart Filter:</strong> Only analyze failed/unstable jobs (reduces analysis by ~80%)</span>
@@ -189,15 +201,52 @@
                     <input type="checkbox" id="enableRCA" checked style="width: auto; margin: 0;">
                     <span><strong>🔬 Root Cause Analysis:</strong> Deep dive into failures with actionable insights</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px; background: white; border-radius: 8px;">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px; background: white; border-radius: 8px; margin-bottom: 10px;">
                     <input type="checkbox" id="enableParallel" checked style="width: auto; margin: 0;">
                     <span><strong>🚀 Parallel Processing:</strong> Use 3 workers for 10x faster analysis</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px; background: white; border-radius: 8px;">
+                    <input type="checkbox" id="enableFallback" checked style="width: auto; margin: 0;">
+                    <span><strong>🔄 Model Fallback:</strong> Automatically try alternative models on errors (uncheck to use only selected model)</span>
                 </label>
             </div>
         </div>
 
         <div class="step">
-            <h2>Step 5: Analyze Logs</h2>
+            <h2>Step 5: Jira Integration (Optional)</h2>
+            <div style="margin: 15px 0;">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px; background: white; border-radius: 8px; margin-bottom: 10px;">
+                    <input type="checkbox" id="enableJira" style="width: auto; margin: 0;" onchange="toggleJiraFields(); saveCredentials();">
+                    <span><strong>📝 Post results to Jira ticket</strong></span>
+                </label>
+                <div id="jiraFields" style="display: none; margin-top: 10px;">
+                    <input type="text" id="jiraUrl" placeholder="Jira URL (e.g., https://your-company.atlassian.net)" style="margin-bottom: 10px;" onchange="saveCredentials()">
+                    <input type="text" id="jiraTicket" placeholder="Jira Ticket ID (e.g., PROJ-123)" style="margin-bottom: 10px;" onchange="saveCredentials()">
+                    <input type="password" id="jiraPat" placeholder="Jira Personal Access Token (PAT)" style="margin-bottom: 10px;" onchange="saveCredentials()">
+
+                    <label style="display: block; margin-bottom: 5px; color: #666; font-size: 14px;">Jira API Version:</label>
+                    <select id="jiraApiVersion" style="margin-bottom: 10px;" onchange="saveCredentials()">
+                        <option value="2" selected>API v2 (Default - Better compatibility)</option>
+                        <option value="3">API v3 (Newer Jira instances)</option>
+                    </select>
+
+                    <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; cursor: pointer;">
+                        <input type="checkbox" id="attachLogFiles" style="width: auto; margin: 0;" onchange="saveCredentials()">
+                        <span style="color: #666; font-size: 14px;">📎 Attach AI analysis files to Jira ticket</span>
+                    </label>
+
+                    <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; cursor: pointer;">
+                        <input type="checkbox" id="attachRawLogs" style="width: auto; margin: 0;" onchange="saveCredentials()">
+                        <span style="color: #666; font-size: 14px;">📋 Also attach raw console/debug logs (disabled by default)</span>
+                    </label>
+
+                    <small style="color: #666; display: block; margin-top: -5px;">💡 Get PAT from: Jira → Profile → Personal Access Tokens</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="step">
+            <h2>Step 6: Analyze Logs</h2>
             <button id="analyzeBtn" onclick="analyzeLogs()">Start Analysis</button>
         </div>
 
@@ -240,6 +289,7 @@
             <div class="export-buttons" id="exportButtons">
                 <button class="export-btn" onclick="exportAsJSON()">📥 Export as JSON</button>
                 <button class="export-btn" onclick="exportAsXML()">🧾 Export as XML</button>
+                <button class="export-btn" id="postToJiraBtn" onclick="postToJira()" style="background: #0052CC; display: none;">📝 Post to Jira</button>
             </div>
         </div>
 
@@ -272,6 +322,8 @@
 	    <script>
         let jobCount = 0, analyzedCount = 0;
         let analysisResults = [];
+        let completedJobs = [];  // Track successfully analyzed jobs for retry functionality
+        let totalTestsPassed = 0, totalTestsFailed = 0, totalTests = 0;  // Test statistics
 
         function showDataProtectionModal() {
             document.getElementById('dataProtectionModal').style.display = 'block';
@@ -394,6 +446,7 @@
 
                     updateStats();
                     document.getElementById('exportButtons').classList.add('active');
+                    toggleJiraFields(); // Show Jira button if enabled
                     document.getElementById('statusMessage').textContent = '✅ Analysis complete!';
 
                 } else if (data.status === 'pending' || data.status === 'running') {
@@ -407,6 +460,22 @@
             }
         }
         
+        function toggleSelectedJobInput() {
+            const checkbox = document.getElementById('analyzeSelectedOnly');
+            const container = document.getElementById('selectedJobInputContainer');
+            const filterFailedCheckbox = document.getElementById('filterFailed');
+
+            if (checkbox.checked) {
+                container.style.display = 'block';
+                // Disable smart filter when analyzing a specific job
+                filterFailedCheckbox.checked = false;
+                filterFailedCheckbox.disabled = true;
+            } else {
+                container.style.display = 'none';
+                filterFailedCheckbox.disabled = false;
+            }
+        }
+
         async function fetchModels() {
             const apiKey = document.getElementById('groqApiKey').value;
             if (!apiKey) { alert('Enter API key'); return; }
@@ -416,9 +485,21 @@
                 if (data.error) { alert('Error: ' + data.error); return; }
                 const select = document.getElementById('modelSelect');
                 select.innerHTML = '<option value="">Select model...</option>';
-                data.models.forEach(m => { const opt = document.createElement('option'); opt.value = m.id; opt.textContent = m.name; select.appendChild(opt); });
+                let defaultFound = false;
+                data.models.forEach((m, index) => {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.name;
+                    // Set gpt-oss-120b as default, or first model if not found
+                    if (m.id === 'gpt-oss-120b' || (!defaultFound && index === 0)) {
+                        opt.selected = true;
+                        defaultFound = true;
+                    }
+                    select.appendChild(opt);
+                });
                 select.disabled = false;
-                alert('✓ Models loaded!');
+                const selectedModel = select.options[select.selectedIndex].value;
+                alert(`✓ Models loaded! Default: ${selectedModel}`);
             } catch (e) { alert('Error: ' + e.message); }
         }
         
@@ -428,31 +509,66 @@
             const jenkinsUrl = document.getElementById('jenkinsUrl').value;
 
             // Get optimization options
+            const analyzeSelectedOnly = document.getElementById('analyzeSelectedOnly').checked;
+            const selectedJobName = document.getElementById('selectedJobName').value;
             const filterFailed = document.getElementById('filterFailed').checked;
             const enableRCA = document.getElementById('enableRCA').checked;
             const enableParallel = document.getElementById('enableParallel').checked;
+            const enableFallback = document.getElementById('enableFallback').checked;
             const parallelWorkers = enableParallel ? 3 : 1;
 
             if (!apiKey || !model || !jenkinsUrl) { alert('Complete all steps'); return; }
+
+            // Validate selected job name if checkbox is checked
+            if (analyzeSelectedOnly && !selectedJobName.trim()) {
+                alert('Please enter a job name to analyze');
+                return;
+            }
+
             document.getElementById('analyzeBtn').disabled = true;
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.add('active');
-            document.getElementById('jobResults').innerHTML = '';
-            jobCount = 0; analyzedCount = 0;
-            analysisResults = []; // Reset results
+
+            // Check if this is a retry (button text changed to "Retry Analysis")
+            const isRetry = document.getElementById('analyzeBtn').textContent.includes('Retry');
+
+            if (!isRetry) {
+                // Fresh analysis - clear everything
+                document.getElementById('jobResults').innerHTML = '';
+                jobCount = 0; analyzedCount = 0;
+                analysisResults = []; // Reset results
+                completedJobs = []; // Reset completed jobs list
+                totalTestsPassed = 0; totalTestsFailed = 0; totalTests = 0; // Reset test statistics
+                document.getElementById('analyzeBtn').textContent = 'Start Analysis'; // Reset button text
+            }
+            // If retry, keep existing results and completed jobs list
+
             document.getElementById('exportButtons').classList.remove('active');
             try {
+                const requestBody = {
+                    jenkins_url: jenkinsUrl,
+                    groq_api_key: apiKey,
+                    model: model,
+                    filter_failed: filterFailed,
+                    enable_rca: enableRCA,
+                    enable_fallback: enableFallback,
+                    parallel_workers: parallelWorkers
+                };
+
+                // Add selected job name if checkbox is checked
+                if (analyzeSelectedOnly && selectedJobName.trim()) {
+                    requestBody.specific_job = selectedJobName.trim();
+                }
+
+                // Add completed jobs list for retry functionality
+                if (isRetry && completedJobs.length > 0) {
+                    requestBody.completed_jobs = completedJobs;
+                }
+
                 const res = await fetch('/api/analyze', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        jenkins_url: jenkinsUrl,
-                        groq_api_key: apiKey,
-                        model: model,
-                        filter_failed: filterFailed,
-                        enable_rca: enableRCA,
-                        parallel_workers: parallelWorkers
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
@@ -483,21 +599,81 @@
                                 document.getElementById('statusMessage').textContent = `Analyzing ${data.job} (${data.current}/${data.total})`;
                             }
                             else if (data.type === 'job_result') {
-                                // Store result for export
-                                analysisResults.push({
+                                // Check for rate limit error
+                                if (data.analysis && data.analysis.includes('RATE_LIMIT_STOP|||')) {
+                                    const parts = data.analysis.split('|||');
+                                    const resetInfo = parts[1] || 'Reset time unknown';
+                                    const errorMsg = parts[2] || 'Rate limit exceeded';
+
+                                    // Stop the stream
+                                    reader.cancel();
+
+                                    // Show rate limit message
+                                    document.getElementById('statusMessage').innerHTML = `
+                                        <div style="color: #ff9800; font-weight: bold;">
+                                            ⏸️ Analysis Paused - Rate Limit Reached<br>
+                                            <span style="font-size: 0.9em;">Will automatically retry: ${resetInfo}</span><br>
+                                            <span style="font-size: 0.8em; color: #666;">${errorMsg}</span>
+                                        </div>
+                                    `;
+                                    document.getElementById('analyzeBtn').disabled = false;
+                                    document.getElementById('analyzeBtn').textContent = 'Retry Analysis';
+
+                                    // Show a prominent alert
+                                    alert(`⏸️ Rate Limit Reached!\n\nAnalysis will automatically retry: ${resetInfo}\n\nYou can:\n1. Wait and click "Retry Analysis" button\n2. Try a different model\n3. Enable "Model Fallback" to use alternative models`);
+                                    return;
+                                }
+
+                                // Check if this job already exists in results (for retry scenario)
+                                const existingIndex = analysisResults.findIndex(r => r.job === data.job);
+                                const resultData = {
                                     job: data.job,
                                     build: data.build,
                                     analysis: data.analysis,
                                     log_size: data.log_size,
                                     mode: data.mode || 'Analysis',
-                                    timestamp: new Date().toISOString()
-                                });
+                                    timestamp: new Date().toISOString(),
+                                    status: data.status,
+                                    passed_tests: data.passed_tests || 0,
+                                    total_tests: data.total_tests || 0
+                                };
+
+                                if (existingIndex >= 0) {
+                                    // Update existing result (retry scenario)
+                                    analysisResults[existingIndex] = resultData;
+                                } else {
+                                    // Add new result
+                                    analysisResults.push(resultData);
+                                }
+
+                                // Track completed job for retry functionality
+                                // Add to completedJobs if the analysis completed (even if it found failures)
+                                // Only skip if there was an ERROR in the analysis process itself
+                                const hasAnalysisError = data.analysis.startsWith('Error:') ||
+                                                         data.analysis.includes('Rate limit reached') ||
+                                                         data.analysis.includes('All models failed') ||
+                                                         data.status === 'error';
+
+                                if (!hasAnalysisError && !completedJobs.includes(data.job)) {
+                                    completedJobs.push(data.job);
+                                }
+
+                                // Update test statistics
+                                if (data.status === 'passed' && data.passed_tests && data.total_tests) {
+                                    totalTestsPassed += data.passed_tests;
+                                    totalTests += data.total_tests;
+                                }
 
                                 // Determine build status from analysis
                                 const analysisLower = data.analysis.toLowerCase();
                                 let buildStatus = 'success';
                                 let statusIcon = '🔵';
-                                if (analysisLower.includes('failure') || analysisLower.includes('failed')) {
+
+                                // Check if this is a passed job (all tests passed)
+                                if (data.status === 'passed' || analysisLower.includes('all tests passed')) {
+                                    buildStatus = 'success';
+                                    statusIcon = '✅';
+                                } else if (analysisLower.includes('failure') || analysisLower.includes('failed')) {
                                     buildStatus = 'failure';
                                     statusIcon = '🔴';
                                 } else if (analysisLower.includes('unstable') || analysisLower.includes('warning')) {
@@ -508,9 +684,19 @@
                                 const modeLabel = data.mode || '📊 Analysis';
                                 const isRCA = modeLabel.includes('RCA');
 
-                                const card = document.createElement('div');
-                                card.className = 'job-card';
-                                card.innerHTML = `
+                                // Check if a card already exists for this job (retry scenario)
+                                const jobResults = document.getElementById('jobResults');
+                                const existingCards = jobResults.querySelectorAll('.job-card');
+                                let existingCard = null;
+
+                                existingCards.forEach(card => {
+                                    const jobTitle = card.querySelector('.job-title');
+                                    if (jobTitle && jobTitle.textContent === data.job) {
+                                        existingCard = card;
+                                    }
+                                });
+
+                                const cardHTML = `
                                     <div class="job-header" onclick="toggleJobCard(this)">
                                         <div class="job-title-section">
                                             <span class="build-status-icon">${statusIcon}</span>
@@ -527,7 +713,18 @@
                                         <div class="job-body">${escapeHtml(data.analysis)}</div>
                                     </div>
                                 `;
-                                document.getElementById('jobResults').appendChild(card);
+
+                                if (existingCard) {
+                                    // Update existing card
+                                    existingCard.innerHTML = cardHTML;
+                                } else {
+                                    // Create new card
+                                    const card = document.createElement('div');
+                                    card.className = 'job-card';
+                                    card.innerHTML = cardHTML;
+                                    jobResults.appendChild(card);
+                                }
+
                                 updateStats();
                             }
                             else if (data.type === 'complete') {
@@ -535,6 +732,7 @@
                                 document.getElementById('progressFill').style.width = '100%';
                                 document.getElementById('progressFill').textContent = '100%';
                                 document.getElementById('exportButtons').classList.add('active'); // Show export buttons
+                                toggleJiraFields(); // Show Jira button if enabled
 
                                 // Show pipeline view for all analyses
                                 if (analysisResults.length > 0) {
@@ -548,7 +746,17 @@
                         }
                     }
                 }
-            } catch (e) { alert('Error: ' + e.message); }
+            } catch (e) {
+                // On error, enable retry functionality
+                document.getElementById('statusMessage').innerHTML = `
+                    <div style="color: #f44336; font-weight: bold;">
+                        ❌ Error: ${e.message}<br>
+                        <span style="font-size: 0.9em;">Click "Retry Analysis" to continue from where it failed</span>
+                    </div>
+                `;
+                document.getElementById('analyzeBtn').textContent = 'Retry Analysis';
+                alert('Error: ' + e.message);
+            }
             document.getElementById('analyzeBtn').disabled = false;
         }
         
@@ -568,37 +776,41 @@
             const stats = document.getElementById('summaryStats');
 
             // Calculate success/failure counts
-            let successCount = 0;
-            let failureCount = 0;
+            let passedJobsCount = 0;  // Jobs with all tests passed (skipped AI)
+            let failedJobsCount = 0;  // Jobs with failures (analyzed by AI)
             let unstableCount = 0;
 
             analysisResults.forEach(result => {
                 const analysisLower = result.analysis.toLowerCase();
-                if (analysisLower.includes('failure') || analysisLower.includes('failed')) {
-                    failureCount++;
+                if (result.status === 'passed' || analysisLower.includes('all tests passed')) {
+                    passedJobsCount++;
+                } else if (analysisLower.includes('failure') || analysisLower.includes('failed')) {
+                    failedJobsCount++;
                 } else if (analysisLower.includes('unstable') || analysisLower.includes('warning')) {
                     unstableCount++;
-                } else {
-                    successCount++;
                 }
             });
 
             stats.innerHTML = `
                 <div class="stat-card">
                     <div class="stat-value">${analyzedCount}</div>
-                    <div class="stat-label">Jobs Analyzed</div>
+                    <div class="stat-label">Total Jobs</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" style="color: #4caf50;">${successCount}</div>
-                    <div class="stat-label">Success</div>
+                    <div class="stat-value" style="color: #4caf50;">${passedJobsCount}</div>
+                    <div class="stat-label">All Tests Passed</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" style="color: #f44336;">${failureCount}</div>
-                    <div class="stat-label">Failures</div>
+                    <div class="stat-value" style="color: #f44336;">${failedJobsCount}</div>
+                    <div class="stat-label">Jobs with Failures</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" style="color: #ff9800;">${unstableCount}</div>
                     <div class="stat-label">Unstable</div>
+                </div>
+                <div class="stat-card" style="border-left: 2px solid #2196f3; padding-left: 15px;">
+                    <div class="stat-value" style="color: #2196f3;">${totalTests}</div>
+                    <div class="stat-label">Total Tests (${totalTestsPassed} passed)</div>
                 </div>
             `;
 
@@ -697,6 +909,172 @@
 	            link.click();
 	            URL.revokeObjectURL(url);
 	        }
+
+        // Save credentials to localStorage
+        function saveCredentials() {
+            try {
+                localStorage.setItem('groqApiKey', document.getElementById('groqApiKey').value);
+                localStorage.setItem('jenkinsUrl', document.getElementById('jenkinsUrl').value);
+                localStorage.setItem('jiraUrl', document.getElementById('jiraUrl').value);
+                localStorage.setItem('jiraTicket', document.getElementById('jiraTicket').value);
+                localStorage.setItem('jiraPat', document.getElementById('jiraPat').value);
+                localStorage.setItem('enableJira', document.getElementById('enableJira').checked);
+                localStorage.setItem('jiraApiVersion', document.getElementById('jiraApiVersion').value);
+                localStorage.setItem('attachLogFiles', document.getElementById('attachLogFiles').checked);
+                localStorage.setItem('attachRawLogs', document.getElementById('attachRawLogs').checked);
+            } catch (e) {
+                console.error('Failed to save credentials:', e);
+            }
+        }
+
+        // Load credentials from localStorage
+        function loadCredentials() {
+            try {
+                const groqApiKey = localStorage.getItem('groqApiKey');
+                if (groqApiKey) document.getElementById('groqApiKey').value = groqApiKey;
+
+                const jenkinsUrl = localStorage.getItem('jenkinsUrl');
+                if (jenkinsUrl) document.getElementById('jenkinsUrl').value = jenkinsUrl;
+
+                const jiraUrl = localStorage.getItem('jiraUrl');
+                if (jiraUrl) document.getElementById('jiraUrl').value = jiraUrl;
+
+                const jiraTicket = localStorage.getItem('jiraTicket');
+                if (jiraTicket) document.getElementById('jiraTicket').value = jiraTicket;
+
+                const jiraPat = localStorage.getItem('jiraPat');
+                if (jiraPat) document.getElementById('jiraPat').value = jiraPat;
+
+                const jiraApiVersion = localStorage.getItem('jiraApiVersion');
+                if (jiraApiVersion) document.getElementById('jiraApiVersion').value = jiraApiVersion;
+
+                const attachLogFiles = localStorage.getItem('attachLogFiles') === 'true';
+                if (attachLogFiles) document.getElementById('attachLogFiles').checked = true;
+
+                const attachRawLogs = localStorage.getItem('attachRawLogs') === 'true';
+                if (attachRawLogs) document.getElementById('attachRawLogs').checked = true;
+
+                const enableJira = localStorage.getItem('enableJira') === 'true';
+                if (enableJira) {
+                    document.getElementById('enableJira').checked = true;
+                    toggleJiraFields();
+                }
+            } catch (e) {
+                console.error('Failed to load credentials:', e);
+            }
+        }
+
+        // Clear saved credentials
+        function clearCredentials() {
+            if (confirm('Are you sure you want to clear all saved credentials?')) {
+                try {
+                    localStorage.removeItem('groqApiKey');
+                    localStorage.removeItem('jenkinsUrl');
+                    localStorage.removeItem('jiraUrl');
+                    localStorage.removeItem('jiraTicket');
+                    localStorage.removeItem('jiraPat');
+                    localStorage.removeItem('enableJira');
+                    localStorage.removeItem('jiraApiVersion');
+                    localStorage.removeItem('attachLogFiles');
+                    localStorage.removeItem('attachRawLogs');
+
+                    document.getElementById('groqApiKey').value = '';
+                    document.getElementById('jenkinsUrl').value = '';
+                    document.getElementById('jiraUrl').value = '';
+                    document.getElementById('jiraTicket').value = '';
+                    document.getElementById('jiraPat').value = '';
+                    document.getElementById('enableJira').checked = false;
+                    document.getElementById('jiraApiVersion').value = '2';
+                    document.getElementById('attachLogFiles').checked = false;
+                    document.getElementById('attachRawLogs').checked = false;
+                    toggleJiraFields();
+
+                    alert('✅ Credentials cleared!');
+                } catch (e) {
+                    console.error('Failed to clear credentials:', e);
+                }
+            }
+        }
+
+        function toggleJiraFields() {
+            const enabled = document.getElementById('enableJira').checked;
+            document.getElementById('jiraFields').style.display = enabled ? 'block' : 'none';
+            const jiraBtn = document.getElementById('postToJiraBtn');
+            if (enabled && analysisResults.length > 0) {
+                jiraBtn.style.display = 'block';
+            } else {
+                jiraBtn.style.display = 'none';
+            }
+        }
+
+        async function postToJira() {
+            const jiraUrl = document.getElementById('jiraUrl').value;
+            const jiraTicket = document.getElementById('jiraTicket').value;
+            const jiraPat = document.getElementById('jiraPat').value;
+
+            if (!jiraUrl || !jiraTicket || !jiraPat) {
+                alert('Please fill in all Jira fields (URL, Ticket ID, and PAT)');
+                return;
+            }
+
+            if (analysisResults.length === 0) {
+                alert('No analysis results to post');
+                return;
+            }
+
+            const btn = document.getElementById('postToJiraBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Posting to Jira...';
+
+            try {
+                const jiraApiVersion = document.getElementById('jiraApiVersion').value;
+                const attachLogFiles = document.getElementById('attachLogFiles').checked;
+                const attachRawLogs = document.getElementById('attachRawLogs').checked;
+
+                // Get Jenkins URL for Robot Framework links
+                const jenkinsUrl = document.getElementById('jenkinsUrl').value;
+
+                const res = await fetch('/api/post-to-jira', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        jira_url: jiraUrl,
+                        jira_ticket: jiraTicket,
+                        jira_pat: jiraPat,
+                        api_version: jiraApiVersion,
+                        attach_logs: attachLogFiles,
+                        attach_raw_logs: attachRawLogs,
+                        jenkins_url: jenkinsUrl,
+                        analysis_results: analysisResults
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.error) {
+                    alert('❌ Error posting to Jira: ' + data.error);
+                } else {
+                    const ticket = data.jira_ticket || jiraTicket;
+                    const commentId = data.comment_id || 'created';
+                    let message = '✅ Successfully posted analysis to Jira ticket ' + ticket + '!';
+                    if (commentId && commentId !== 'created') {
+                        message += '\n\nComment ID: ' + commentId;
+                    }
+                    if (data.attachments_count) {
+                        message += '\n\n📎 Attached ' + data.attachments_count + ' analysis file(s)';
+                    }
+                    alert(message);
+                }
+            } catch (e) {
+                alert('❌ Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📝 Post to Jira';
+            }
+        }
+
+        // Load credentials when page loads
+        window.addEventListener('DOMContentLoaded', loadCredentials);
     </script>
 </body>
 </html>
