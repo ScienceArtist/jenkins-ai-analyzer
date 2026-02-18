@@ -643,20 +643,27 @@ class JenkinsAnalyzer:
 
         return fallback_order
 
-    def _analyze_chunk_with_fallback(self, chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode=False, enable_fallback=True):
-        """Analyze a single chunk with automatic model fallback on errors"""
+    def _analyze_chunk_with_fallback(self, chunk, chunk_label, job_name, build_number, model, groq_api_key, rca_mode=False, enable_fallback=True, max_retries=3):
+        """Analyze a single chunk with automatic model fallback on errors and rate limit retry
+
+        Args:
+            max_retries: Maximum number of retry attempts for rate limits (default: 3)
+        """
         models_to_try = self._get_fallback_models(model, enable_fallback)
 
         for attempt, current_model in enumerate(models_to_try):
-            try:
-                headers = {
-                    'Authorization': f'Bearer {groq_api_key}',
-                    'Content-Type': 'application/json'
-                }
+            # Retry loop for rate limits
+            retry_count = 0
+            while retry_count <= max_retries:
+                try:
+                    headers = {
+                        'Authorization': f'Bearer {groq_api_key}',
+                        'Content-Type': 'application/json'
+                    }
 
-                if rca_mode:
-                    # RCA-focused prompt
-                    system_prompt = '''You are an expert QA engineer performing Root Cause Analysis (RCA) on Jenkins build failures.
+                    if rca_mode:
+                        # RCA-focused prompt
+                        system_prompt = '''You are an expert QA engineer performing Root Cause Analysis (RCA) on Jenkins build failures.
 
 CRITICAL RULES FOR ACCURACY:
 1. ONLY state facts you can verify from the logs - NEVER guess or assume
@@ -672,7 +679,7 @@ ANALYSIS FOCUS:
 4. Suggest specific actionable steps: "Retest", "Create bug", "Check config", "Manual investigation needed", etc.
 5. Focus on actionable insights for QA team, not generic observations'''
 
-                    user_prompt = f'''Perform Root Cause Analysis on this failure section from Jenkins build:
+                        user_prompt = f'''Perform Root Cause Analysis on this failure section from Jenkins build:
 Job: "{job_name}" Build #{build_number}
 Section: {chunk_label}
 
@@ -685,9 +692,9 @@ Provide (BE HONEST - say "unclear" or "unable to determine" if you cannot be cer
 4. **Recommended Actions**: Specific steps (e.g., "Retest - transient issue", "Create bug - code defect", "Manual investigation needed - unclear from logs")
 5. **Confidence Level**: State if you're certain, somewhat certain, or uncertain about the analysis
 6. **Related Issues**: Any warnings or secondary problems'''
-                else:
-                    # Standard analysis prompt
-                    system_prompt = '''You are an expert Jenkins build log analyzer for QA teams. Analyze logs with EXTREME ACCURACY.
+                    else:
+                        # Standard analysis prompt
+                        system_prompt = '''You are an expert Jenkins build log analyzer for QA teams. Analyze logs with EXTREME ACCURACY.
 
 CRITICAL RULES FOR ACCURACY:
 1. ONLY state facts you can verify from the logs - NEVER guess or assume
@@ -699,7 +706,7 @@ CRITICAL RULES FOR ACCURACY:
 7. If analyzing a partial section, clearly state what you can/cannot determine
 8. When in doubt, recommend manual investigation rather than making uncertain claims'''
 
-                    user_prompt = f'''Analyze this {chunk_label.upper()} section of Jenkins build log:
+                        user_prompt = f'''Analyze this {chunk_label.upper()} section of Jenkins build log:
 Job: "{job_name}" Build #{build_number}
 
 {chunk}
@@ -712,87 +719,108 @@ Provide (BE HONEST - say "unclear" or "not visible in this section" if uncertain
 5. **Test Results**: Pass/fail counts if visible (or "Not visible in this section")
 6. **Confidence**: State if this section provides complete or partial information'''
 
-                payload = {
-                    'model': current_model,
-                    'messages': [
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_prompt}
-                    ],
-                    'temperature': 0.3,  # Lower temperature for more factual responses
-                    'max_tokens': 1500   # More tokens for detailed analysis
-                }
+                    payload = {
+                        'model': current_model,
+                        'messages': [
+                            {'role': 'system', 'content': system_prompt},
+                            {'role': 'user', 'content': user_prompt}
+                        ],
+                        'temperature': 0.3,  # Lower temperature for more factual responses
+                        'max_tokens': 1500   # More tokens for detailed analysis
+                    }
 
-                response = requests.post('https://api.groq.com/openai/v1/chat/completions', headers=headers, json=payload, timeout=60)
+                    response = requests.post('https://api.groq.com/openai/v1/chat/completions', headers=headers, json=payload, timeout=60)
 
-                if response.status_code == 200:
-                    result = response.json()
-                    model_note = f" (using {current_model})" if current_model != model else ""
-                    return f"**{chunk_label.upper()} SECTION:**{model_note}\n{result['choices'][0]['message']['content']}"
-                else:
-                    # Check if it's a recoverable error (rate limit, decommissioned model, etc.)
-                    error_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
-                    error_code = error_data.get('error', {}).get('code', '')
-
-                    # Special handling for rate limits - stop analysis and inform user
-                    if error_code == 'rate_limit_exceeded':
-                        error_message = error_data.get('error', {}).get('message', '')
-                        # Try to extract reset time from error message or headers
-                        reset_time = None
-
-                        # Check X-RateLimit-Reset header (Unix timestamp)
-                        if 'X-RateLimit-Reset' in response.headers:
-                            try:
-                                reset_timestamp = int(response.headers['X-RateLimit-Reset'])
-                                reset_time = datetime.fromtimestamp(reset_timestamp)
-                            except:
-                                pass
-
-                        # If no header, try to parse from error message
-                        if not reset_time:
-                            import re
-                            # Look for patterns like "try again in 5m30s" or "retry after 330 seconds"
-                            time_match = re.search(r'(\d+)m(\d+)s|(\d+)\s*seconds?', error_message)
-                            if time_match:
-                                if time_match.group(1):  # Format: 5m30s
-                                    minutes = int(time_match.group(1))
-                                    seconds = int(time_match.group(2))
-                                    total_seconds = minutes * 60 + seconds
-                                else:  # Format: 330 seconds
-                                    total_seconds = int(time_match.group(3))
-                                reset_time = datetime.now() + timedelta(seconds=total_seconds)
-
-                        # Format the error message with reset time
-                        if reset_time:
-                            time_until_reset = reset_time - datetime.now()
-                            minutes = int(time_until_reset.total_seconds() // 60)
-                            seconds = int(time_until_reset.total_seconds() % 60)
-                            reset_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
-                            reset_timestamp = reset_time.strftime('%H:%M:%S')
-                            error_msg = f"RATE_LIMIT_STOP|||Reset in {reset_str} (at {reset_timestamp})|||{error_message}"
-                        else:
-                            error_msg = f"RATE_LIMIT_STOP|||Reset time unknown|||{error_message}"
-
-                        return f"**{chunk_label.upper()} SECTION:** {error_msg}"
-
-                    # Errors that should trigger fallback to next model (excluding rate limits)
-                    recoverable_errors = ['model_decommissioned', 'model_not_found']
-
-                    if error_code in recoverable_errors and attempt < len(models_to_try) - 1:
-                        next_model = models_to_try[attempt + 1]
-                        print(f"{error_code} for {current_model}, trying fallback model {next_model}...")
-                        time.sleep(1)  # Brief pause before trying next model
-                        continue
+                    if response.status_code == 200:
+                        result = response.json()
+                        model_note = f" (using {current_model})" if current_model != model else ""
+                        return f"**{chunk_label.upper()} SECTION:**{model_note}\n{result['choices'][0]['message']['content']}"
                     else:
-                        # Last model or non-recoverable error
-                        return f"**{chunk_label.upper()} SECTION:** Error - {response.text}"
+                        # Check if it's a recoverable error (rate limit, decommissioned model, etc.)
+                        error_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
+                        error_code = error_data.get('error', {}).get('code', '')
 
-            except Exception as e:
-                if attempt < len(models_to_try) - 1:
-                    print(f"Error with {current_model}: {e}, trying fallback...")
-                    time.sleep(1)
-                    continue
-                else:
-                    return f"**{chunk_label.upper()} SECTION:** Error - {str(e)}"
+                        # Special handling for rate limits - automatic retry with backoff
+                        if error_code == 'rate_limit_exceeded':
+                            error_message = error_data.get('error', {}).get('message', '')
+                            # Try to extract wait time from error message or headers
+                            wait_seconds = None
+
+                            # Check X-RateLimit-Reset header (Unix timestamp)
+                            if 'X-RateLimit-Reset' in response.headers:
+                                try:
+                                    reset_timestamp = int(response.headers['X-RateLimit-Reset'])
+                                    reset_time = datetime.fromtimestamp(reset_timestamp)
+                                    wait_seconds = (reset_time - datetime.now()).total_seconds()
+                                except:
+                                    pass
+
+                            # If no header, try to parse from error message
+                            if not wait_seconds:
+                                import re
+                                # Look for patterns like "try again in 5m30s" or "retry after 330 seconds"
+                                time_match = re.search(r'try again in (\d+)m(\d+(?:\.\d+)?)s|retry after (\d+)\s*seconds?', error_message)
+                                if time_match:
+                                    if time_match.group(1):  # Format: 5m30s
+                                        minutes = int(time_match.group(1))
+                                        seconds = float(time_match.group(2))
+                                        wait_seconds = minutes * 60 + seconds
+                                    else:  # Format: 330 seconds
+                                        wait_seconds = float(time_match.group(3))
+
+                            # If we can retry, wait and try again
+                            if retry_count < max_retries and wait_seconds:
+                                # Add a small buffer (5 seconds) to ensure rate limit has reset
+                                wait_seconds = wait_seconds + 5
+
+                                minutes = int(wait_seconds // 60)
+                                seconds = int(wait_seconds % 60)
+                                wait_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+
+                                print(f"⏳ Rate limit hit for {current_model}. Waiting {wait_str} before retry {retry_count + 1}/{max_retries}...")
+                                print(f"   Error: {error_message}")
+
+                                time.sleep(wait_seconds)
+                                retry_count += 1
+                                continue  # Retry the same request
+                            else:
+                                # Max retries reached or can't determine wait time
+                                if retry_count >= max_retries:
+                                    error_msg = f"RATE_LIMIT_STOP|||Max retries ({max_retries}) reached|||{error_message}"
+                                else:
+                                    error_msg = f"RATE_LIMIT_STOP|||Cannot determine wait time|||{error_message}"
+
+                                return f"**{chunk_label.upper()} SECTION:** {error_msg}"
+
+                        # Errors that should trigger fallback to next model (excluding rate limits)
+                        recoverable_errors = ['model_decommissioned', 'model_not_found']
+
+                        if error_code in recoverable_errors and attempt < len(models_to_try) - 1:
+                            next_model = models_to_try[attempt + 1]
+                            print(f"{error_code} for {current_model}, trying fallback model {next_model}...")
+                            time.sleep(1)  # Brief pause before trying next model
+                            break  # Break retry loop to try next model
+                        else:
+                            # Last model or non-recoverable error
+                            return f"**{chunk_label.upper()} SECTION:** Error - {response.text}"
+
+                except Exception as e:
+                    if retry_count < max_retries:
+                        # Retry on network errors with exponential backoff
+                        wait_time = (2 ** retry_count) * 2  # 2s, 4s, 8s
+                        print(f"⚠️  Network error with {current_model}: {e}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        retry_count += 1
+                        continue
+                    elif attempt < len(models_to_try) - 1:
+                        print(f"Error with {current_model}: {e}, trying fallback...")
+                        time.sleep(1)
+                        break  # Break retry loop to try next model
+                    else:
+                        return f"**{chunk_label.upper()} SECTION:** Error - {str(e)}"
+
+                # If we successfully processed or need to move to next model, break retry loop
+                break
 
         return f"**{chunk_label.upper()} SECTION:** All models failed"
 
