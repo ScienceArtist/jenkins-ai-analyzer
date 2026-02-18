@@ -132,6 +132,24 @@ def save_job_analysis(job_name, build_number, jenkins_url, analysis_text, status
 		finally:
 			conn.close()
 
+def is_build_already_analyzed(job_name, build_number, jenkins_url):
+	"""Check if a specific job build was already analyzed"""
+	with db_lock:
+		conn = sqlite3.connect(DB_PATH)
+		cursor = conn.cursor()
+		try:
+			cursor.execute('''
+				SELECT COUNT(*) FROM job_analyses
+				WHERE job_name = ? AND build_number = ? AND jenkins_url = ?
+			''', (job_name, str(build_number), jenkins_url))
+			count = cursor.fetchone()[0]
+			return count > 0
+		except Exception as e:
+			print(f"Error checking if build was analyzed: {e}")
+			return False
+		finally:
+			conn.close()
+
 def get_analyses_by_date_range(start_date, end_date, jenkins_url=None):
 	"""Get all analyses within a date range"""
 	with db_lock:
@@ -2439,6 +2457,19 @@ def run_daily_analysis():
 					continue
 
 				try:
+					# First, get the latest build number WITHOUT analyzing
+					logs = analyzer.get_job_logs(job_name, limit=1)
+					if not logs:
+						print(f"⏭️  Skipping {job_name} - no builds found")
+						continue
+
+					latest_build = logs[0]['build']
+
+					# Check if this build was already analyzed
+					if is_build_already_analyzed(job_name, latest_build, jenkins_url):
+						print(f"⏭️  Skipping {job_name} #{latest_build} - already analyzed")
+						continue
+
 					# Analyze job
 					result = analyzer.analyze_job_parallel(
 						job_name, model, groq_api_key,
@@ -2547,4 +2578,4 @@ def get_daily_analysis_status(task_id):
 
 
 if __name__ == '__main__':
-	app.run(host='0.0.0.0', debug=True, port=5000)
+	app.run(debug=True, port=5000)
