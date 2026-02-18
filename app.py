@@ -2528,7 +2528,8 @@ def dashboard_chat():
 
 	# Get credentials from environment
 	groq_api_key = os.getenv('GROQ_API_KEY')
-	model = os.getenv('DEFAULT_MODEL', 'llama-3.3-70b-versatile')
+	# Use model from request, fallback to environment default
+	model = data.get('model', os.getenv('DEFAULT_MODEL', 'llama-3.3-70b-versatile'))
 
 	if not user_question or not groq_api_key:
 		return jsonify({'error': 'Missing question or API key not configured'}), 400

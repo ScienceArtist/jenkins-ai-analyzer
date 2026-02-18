@@ -383,9 +383,14 @@
         }
         #chatInput {
             display: flex;
+            flex-direction: column;
             padding: 15px;
             background: var(--bg-secondary);
             border-radius: 0 0 10px 10px;
+            gap: 10px;
+        }
+        .chat-input-row {
+            display: flex;
             gap: 10px;
         }
         #chatInput input {
@@ -396,6 +401,16 @@
             background: var(--bg-tertiary);
             color: var(--text-primary);
             font-size: 0.95em;
+        }
+        #chatModelSelector {
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 0.85em;
+            cursor: pointer;
+            min-width: 200px;
         }
         #chatInput button {
             padding: 10px 20px;
@@ -532,8 +547,20 @@
             </div>
         </div>
         <div id="chatInput">
-            <input type="text" id="chatQuestion" placeholder="Ask a question..." onkeypress="if(event.key==='Enter') sendChatMessage()">
-            <button onclick="sendChatMessage()" id="chatSendBtn">Send</button>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
+                <label style="font-size: 0.85em; color: var(--text-secondary);">Model:</label>
+                <select id="chatModelSelector">
+                    <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Fast)</option>
+                    <option value="llama-3.1-70b-versatile">Llama 3.1 70B</option>
+                    <option value="llama-3.1-8b-instant">Llama 3.1 8B (Instant)</option>
+                    <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
+                    <option value="gemma2-9b-it">Gemma 2 9B</option>
+                </select>
+            </div>
+            <div class="chat-input-row">
+                <input type="text" id="chatQuestion" placeholder="Ask a question..." onkeypress="if(event.key==='Enter') sendChatMessage()">
+                <button onclick="sendChatMessage()" id="chatSendBtn">Send</button>
+            </div>
         </div>
     </div>
 
@@ -1412,6 +1439,9 @@
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
             try {
+                // Get selected model
+                const selectedModel = document.getElementById('chatModelSelector').value;
+
                 // Prepare dashboard context with detailed job information
                 const failedJobs = [];
                 const unstableJobs = [];
@@ -1460,7 +1490,8 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         question: question,
-                        dashboard_data: dashboardData
+                        dashboard_data: dashboardData,
+                        model: selectedModel
                     })
                 });
 
