@@ -2518,6 +2518,164 @@ def get_new_failures():
 		return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/dashboard-chat', methods=['POST'])
+def dashboard_chat():
+	"""AI assistant to answer questions about the dashboard"""
+	data = request.json or {}
+
+	user_question = data.get('question')
+	dashboard_data = data.get('dashboard_data', {})
+
+	# Get credentials from environment
+	groq_api_key = os.getenv('GROQ_API_KEY')
+	model = os.getenv('DEFAULT_MODEL', 'llama-3.3-70b-versatile')
+
+	if not user_question or not groq_api_key:
+		return jsonify({'error': 'Missing question or API key not configured'}), 400
+
+	try:
+		# Prepare context from dashboard data
+		total_jobs = dashboard_data.get('total_jobs', 0)
+		passed_jobs = dashboard_data.get('passed_jobs', 0)
+		failed_jobs = dashboard_data.get('failed_jobs', 0)
+		unstable_jobs = dashboard_data.get('unstable_jobs', 0)
+		date = dashboard_data.get('date', 'unknown')
+
+		system_prompt = f'''You are a helpful AI assistant for the Jenkins Analysis Dashboard.
+You help users understand their test results and build status.
+
+Current Dashboard Summary:
+- Date: {date}
+- Total Jobs: {total_jobs}
+- Passed: {passed_jobs}
+- Failed: {failed_jobs}
+- Unstable: {unstable_jobs}
+
+Answer questions concisely and helpfully. Focus on:
+1. Explaining build statuses and test results
+2. Helping users understand failure patterns
+3. Suggesting next steps for investigation
+4. Clarifying dashboard features
+
+Keep answers brief (2-3 sentences max) unless asked for details.'''
+
+		user_prompt = f"User question: {user_question}"
+
+		headers = {
+			'Authorization': f'Bearer {groq_api_key}',
+			'Content-Type': 'application/json'
+		}
+
+		payload = {
+			'model': model,
+			'messages': [
+				{'role': 'system', 'content': system_prompt},
+				{'role': 'user', 'content': user_prompt}
+			],
+			'temperature': 0.7,
+			'max_tokens': 300
+		}
+
+		response = requests.post('https://api.groq.com/openai/v1/chat/completions',
+		                        headers=headers, json=payload, timeout=30)
+
+		if response.status_code == 200:
+			result = response.json()
+			answer = result['choices'][0]['message']['content']
+			return jsonify({'answer': answer})
+		else:
+			return jsonify({'error': 'Failed to get response from AI'}), 500
+
+	except Exception as e:
+		print(f"Error in dashboard chat: {e}")
+		return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/reanalyze-job', methods=['POST'])
+def reanalyze_job():
+	"""Re-analyze a specific job with enhanced log gathering (console + debug logs)"""
+	data = request.json or {}
+
+	job_name = data.get('job_name')
+	build_number = data.get('build_number')
+	jenkins_url = data.get('jenkins_url')
+
+	# Get credentials from environment (server-side)
+	groq_api_key = os.getenv('GROQ_API_KEY')
+	model = data.get('model', os.getenv('DEFAULT_MODEL', 'llama-3.3-70b-versatile'))
+
+	if not all([job_name, build_number, jenkins_url, groq_api_key]):
+		return jsonify({'error': 'Missing required parameters or server not configured'}), 400
+
+	try:
+		analyzer = JenkinsAnalyzer(jenkins_url)
+
+		# Get console log
+		console_url = f"{jenkins_url}/job/{job_name}/{build_number}/consoleText"
+		console_response = analyzer.session.get(console_url, timeout=30)
+		console_log = console_response.text if console_response.status_code == 200 else ""
+
+		# Try to get debug/additional logs
+		debug_logs = []
+
+		# Try common debug log locations
+		debug_urls = [
+			f"{jenkins_url}/job/{job_name}/{build_number}/artifact/debug.log",
+			f"{jenkins_url}/job/{job_name}/{build_number}/artifact/logs/debug.log",
+			f"{jenkins_url}/job/{job_name}/{build_number}/artifact/test-output/debug.log",
+		]
+
+		for debug_url in debug_urls:
+			try:
+				debug_response = analyzer.session.get(debug_url, timeout=15)
+				if debug_response.status_code == 200:
+					debug_logs.append(debug_response.text)
+					print(f"✅ Found debug log at: {debug_url}")
+					break  # Use first found debug log
+			except:
+				pass
+
+		# Combine logs for comprehensive analysis
+		combined_log = console_log
+		if debug_logs:
+			combined_log += "\n\n=== DEBUG LOG ===\n\n" + "\n\n".join(debug_logs)
+
+		# Perform deep RCA analysis with combined logs
+		analysis = analyzer.analyze_log_chunked(
+			combined_log, job_name, build_number, model, groq_api_key,
+			rca_mode=True, enable_fallback=True
+		)
+
+		# Update database with new analysis
+		save_job_analysis(
+			job_name=job_name,
+			build_number=build_number,
+			jenkins_url=jenkins_url,
+			analysis_text=analysis,
+			status='reanalyzed',
+			log_type='console+debug' if debug_logs else 'console',
+			log_size=len(combined_log),
+			passed_tests=0,  # Will be extracted from analysis if needed
+			failed_tests=0,
+			total_tests=0,
+			model_used=model,
+			date_key=time.strftime('%Y-%m-%d')
+		)
+
+		return jsonify({
+			'status': 'success',
+			'job_name': job_name,
+			'build_number': build_number,
+			'analysis': analysis,
+			'log_sources': ['console'] + (['debug'] if debug_logs else []),
+			'log_size': len(combined_log)
+		})
+
+	except Exception as e:
+		print(f"Error re-analyzing job: {e}")
+		return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/run-daily-analysis', methods=['POST'])
 def run_daily_analysis():
 	"""

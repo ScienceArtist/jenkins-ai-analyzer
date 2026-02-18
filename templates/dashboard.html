@@ -249,6 +249,7 @@
             cursor: pointer;
             transition: all 0.2s;
             border-left: 4px solid #ccc;
+            position: relative;
         }
         .job-box:hover {
             transform: translateX(5px);
@@ -319,6 +320,97 @@
             color: var(--text-secondary);
             font-size: 1.2em;
         }
+
+        /* AI Chat Assistant Styles */
+        #chatWindow {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 380px;
+            max-height: 600px;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            display: none;
+            flex-direction: column;
+            z-index: 9999;
+            border: 2px solid var(--accent-color);
+        }
+        #chatWindow.open {
+            display: flex;
+        }
+        #chatHeader {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }
+        #chatMessages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            max-height: 400px;
+            background: var(--bg-tertiary);
+        }
+        .chat-message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            max-width: 85%;
+            word-wrap: break-word;
+        }
+        .chat-message.user {
+            background: #667eea;
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+        .chat-message.assistant {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .chat-message.system {
+            background: #f59e0b;
+            color: white;
+            text-align: center;
+            font-size: 0.85em;
+            max-width: 100%;
+        }
+        #chatInput {
+            display: flex;
+            padding: 15px;
+            background: var(--bg-secondary);
+            border-radius: 0 0 10px 10px;
+            gap: 10px;
+        }
+        #chatInput input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 0.95em;
+        }
+        #chatInput button {
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        #chatInput button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         .error-message {
             background: var(--bg-secondary);
             color: var(--error-color);
@@ -349,6 +441,7 @@
             <button onclick="showNewFailures()">🔥 New Failures</button>
             <button onclick="triggerDailyAnalysis()">▶️ Run Analysis Now</button>
             <button onclick="exportResults()">📥 Export JSON</button>
+            <button onclick="toggleChat()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">💬 AI Assistant</button>
         </div>
 
         <div id="filterControls" style="background: var(--bg-secondary); padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: var(--card-shadow); display: none; transition: background 0.3s;">
@@ -424,6 +517,23 @@
 
         <div id="pipelineContainer" class="pipeline-grid">
             <div class="loading">Loading dashboard data...</div>
+        </div>
+    </div>
+
+    <!-- AI Chat Assistant Window -->
+    <div id="chatWindow">
+        <div id="chatHeader">
+            <span>💬 AI Dashboard Assistant</span>
+            <button onclick="toggleChat()" style="background: transparent; border: none; color: white; font-size: 1.2em; cursor: pointer; padding: 0;">✕</button>
+        </div>
+        <div id="chatMessages">
+            <div class="chat-message system">
+                👋 Hi! I'm your AI assistant. Ask me about the dashboard, test results, or build statuses!
+            </div>
+        </div>
+        <div id="chatInput">
+            <input type="text" id="chatQuestion" placeholder="Ask a question..." onkeypress="if(event.key==='Enter') sendChatMessage()">
+            <button onclick="sendChatMessage()" id="chatSendBtn">Send</button>
         </div>
     </div>
 
@@ -789,11 +899,34 @@
         function createJobBox(job) {
             const jobBox = document.createElement('div');
             jobBox.className = 'job-box';
+
+            // Check if analysis is uncertain or rate-limited
+            const analysisText = job.analysis_text || '';
+            const uncertainKeywords = [
+                'uncertain', 'unclear', 'unable to determine', 'cannot determine',
+                'not visible', 'incomplete', 'partial information', 'unclear from',
+                'manual investigation needed', 'additional information needed',
+                'cannot be certain', 'not enough information',
+                'RATE_LIMIT_STOP', 'rate limit reached', 'rate limit exceeded'
+            ];
+            const isUncertain = uncertainKeywords.some(keyword =>
+                analysisText.toLowerCase().includes(keyword.toLowerCase())
+            );
+
+            const uncertainBadge = isUncertain ? '<div style="position: absolute; top: 5px; right: 5px; background: #f59e0b; color: white; font-size: 0.7em; padding: 2px 6px; border-radius: 3px; font-weight: bold;">?</div>' : '';
+
             jobBox.innerHTML = `
+                ${uncertainBadge}
                 <div class="job-box-name">${escapeHtml(job.job_name)}</div>
                 <div class="job-box-build">Build #${job.build_number}</div>
             `;
             jobBox.onclick = () => showJobDetails(job);
+
+            // Add visual indicator for uncertain jobs
+            if (isUncertain) {
+                jobBox.style.borderLeft = '4px solid #f59e0b';
+            }
+
             return jobBox;
         }
 
@@ -803,6 +936,31 @@
 
             const statusIcon = job.status === 'passed' ? '✅' : (job.failed_tests > 0 ? '❌' : '⚠️');
 
+            // Check if analysis is uncertain or rate-limited (contains keywords indicating uncertainty)
+            const analysisText = job.analysis_text || '';
+            const uncertainKeywords = [
+                'uncertain', 'unclear', 'unable to determine', 'cannot determine',
+                'not visible', 'incomplete', 'partial information', 'unclear from',
+                'manual investigation needed', 'additional information needed',
+                'cannot be certain', 'not enough information',
+                'RATE_LIMIT_STOP', 'rate limit reached', 'rate limit exceeded'
+            ];
+            const isUncertain = uncertainKeywords.some(keyword =>
+                analysisText.toLowerCase().includes(keyword.toLowerCase())
+            );
+
+            const isRateLimited = analysisText.includes('RATE_LIMIT_STOP');
+            const warningMessage = isRateLimited ?
+                '⚠️ Rate limit hit - Re-analysis recommended' :
+                '⚠️ Analysis uncertain - Re-analysis recommended';
+
+            const reanalyzeButton = isUncertain ? `
+                <button onclick="reanalyzeJob('${escapeHtml(job.job_name)}', ${job.build_number}, '${escapeHtml(job.jenkins_url || '')}', this)"
+                        style="margin-top: 20px; margin-right: 10px; padding: 10px 20px; background: #f59e0b; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+                    🔄 Re-analyze (Deep)
+                </button>
+            ` : '';
+
             modal.innerHTML = `
                 <div style="background: var(--bg-secondary); border-radius: 10px; max-width: 800px; max-height: 90vh; overflow-y: auto; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.5);">
                     <h2 style="color: var(--text-primary); margin-top: 0;">${statusIcon} ${job.job_name} #${job.build_number}</h2>
@@ -810,11 +968,15 @@
                         Status: <strong>${job.status}</strong> |
                         Tests: ${job.passed_tests}/${job.total_tests} passed
                         ${job.failed_tests > 0 ? ` | <span style="color: #ef4444;">${job.failed_tests} failed</span>` : ''}
+                        ${isUncertain ? `<br><span style="color: #f59e0b; font-weight: bold;">${warningMessage}</span>` : ''}
                     </div>
-                    <div style="background: var(--bg-tertiary); padding: 20px; border-radius: 8px; white-space: pre-wrap; font-family: monospace; font-size: 0.9em; line-height: 1.6; color: var(--text-primary);">
-                        ${escapeHtml(job.analysis_text || 'No analysis available')}
+                    <div id="analysisContent" style="background: var(--bg-tertiary); padding: 20px; border-radius: 8px; white-space: pre-wrap; font-family: monospace; font-size: 0.9em; line-height: 1.6; color: var(--text-primary);">
+                        ${escapeHtml(analysisText || 'No analysis available')}
                     </div>
-                    <button onclick="this.parentElement.parentElement.remove()" style="margin-top: 20px; padding: 10px 20px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Close</button>
+                    <div style="margin-top: 20px;">
+                        ${reanalyzeButton}
+                        <button onclick="this.parentElement.parentElement.parentElement.remove()" style="padding: 10px 20px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Close</button>
+                    </div>
                 </div>
             `;
 
@@ -1142,10 +1304,163 @@
             URL.revokeObjectURL(url);
         }
 
+        async function reanalyzeJob(jobName, buildNumber, jenkinsUrl, buttonElement) {
+            if (!confirm(`Re-analyze ${jobName} #${buildNumber}?\n\nThis will perform a deep analysis using console logs + debug logs (if available) and may take 1-2 minutes.`)) {
+                return;
+            }
+
+            // Disable button and show loading
+            buttonElement.disabled = true;
+            buttonElement.innerHTML = '⏳ Re-analyzing...';
+
+            const analysisContent = document.getElementById('analysisContent');
+            const originalContent = analysisContent.innerHTML;
+            analysisContent.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">⏳ Performing deep analysis...<br>Gathering console logs + debug logs...<br>This may take 1-2 minutes...</div>';
+
+            try {
+                const response = await fetch('/api/reanalyze-job', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        job_name: jobName,
+                        build_number: buildNumber,
+                        jenkins_url: jenkinsUrl || window.location.origin.replace(':5000', '')
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    analysisContent.innerHTML = `<div style="color: #ef4444;">❌ Error: ${escapeHtml(data.error)}</div>`;
+                    buttonElement.disabled = false;
+                    buttonElement.innerHTML = '🔄 Re-analyze (Deep)';
+                    return;
+                }
+
+                // Update with new analysis
+                const logSources = data.log_sources.join(' + ');
+                analysisContent.innerHTML = `
+                    <div style="background: #10b981; color: white; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-weight: bold;">
+                        ✅ Re-analysis complete! (Sources: ${logSources} | Size: ${(data.log_size / 1024).toFixed(1)} KB)
+                    </div>
+                    ${escapeHtml(data.analysis)}
+                `;
+
+                // Remove re-analyze button (analysis is now complete)
+                buttonElement.remove();
+
+                // Refresh dashboard in background to update the main view
+                setTimeout(() => {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    if (urlParams.has('start_date') || urlParams.has('end_date') || urlParams.has('job_names') || urlParams.has('calver') || urlParams.has('hide_empty')) {
+                        applyFiltersFromURL(urlParams);
+                    } else {
+                        refreshDashboard();
+                    }
+                }, 2000);
+
+            } catch (error) {
+                analysisContent.innerHTML = `<div style="color: #ef4444;">❌ Error: ${escapeHtml(error.message)}</div>`;
+                buttonElement.disabled = false;
+                buttonElement.innerHTML = '🔄 Re-analyze (Deep)';
+            }
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // AI Chat Assistant Functions
+        function toggleChat() {
+            const chatWindow = document.getElementById('chatWindow');
+            chatWindow.classList.toggle('open');
+
+            // Focus input when opening
+            if (chatWindow.classList.contains('open')) {
+                document.getElementById('chatQuestion').focus();
+            }
+        }
+
+        async function sendChatMessage() {
+            const input = document.getElementById('chatQuestion');
+            const question = input.value.trim();
+
+            if (!question) return;
+
+            // Add user message to chat
+            const messagesDiv = document.getElementById('chatMessages');
+            const userMsg = document.createElement('div');
+            userMsg.className = 'chat-message user';
+            userMsg.textContent = question;
+            messagesDiv.appendChild(userMsg);
+
+            // Clear input
+            input.value = '';
+
+            // Disable send button
+            const sendBtn = document.getElementById('chatSendBtn');
+            sendBtn.disabled = true;
+            sendBtn.textContent = '...';
+
+            // Add thinking message
+            const thinkingMsg = document.createElement('div');
+            thinkingMsg.className = 'chat-message assistant';
+            thinkingMsg.textContent = '🤔 Thinking...';
+            messagesDiv.appendChild(thinkingMsg);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+            try {
+                // Prepare dashboard context
+                const dashboardData = {
+                    total_jobs: parseInt(document.getElementById('totalJobs')?.textContent || '0'),
+                    passed_jobs: parseInt(document.getElementById('passedJobs')?.textContent || '0'),
+                    failed_jobs: parseInt(document.getElementById('failedJobs')?.textContent || '0'),
+                    unstable_jobs: 0, // Calculate if needed
+                    date: document.getElementById('lastUpdated')?.textContent || 'unknown'
+                };
+
+                const response = await fetch('/api/dashboard-chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        question: question,
+                        dashboard_data: dashboardData
+                    })
+                });
+
+                const data = await response.json();
+
+                // Remove thinking message
+                thinkingMsg.remove();
+
+                if (data.error) {
+                    const errorMsg = document.createElement('div');
+                    errorMsg.className = 'chat-message system';
+                    errorMsg.textContent = '❌ ' + data.error;
+                    messagesDiv.appendChild(errorMsg);
+                } else {
+                    const assistantMsg = document.createElement('div');
+                    assistantMsg.className = 'chat-message assistant';
+                    assistantMsg.textContent = data.answer;
+                    messagesDiv.appendChild(assistantMsg);
+                }
+
+            } catch (error) {
+                thinkingMsg.remove();
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'chat-message system';
+                errorMsg.textContent = '❌ Error: ' + error.message;
+                messagesDiv.appendChild(errorMsg);
+            }
+
+            // Re-enable send button
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+
+            // Scroll to bottom
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
         // Theme toggle functionality
