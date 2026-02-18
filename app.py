@@ -2624,7 +2624,7 @@ Keep answers brief (2-3 sentences max) unless asked for details or lists.'''
 
 @app.route('/api/reanalyze-job', methods=['POST'])
 def reanalyze_job():
-	"""Re-analyze a specific job with enhanced log gathering (console + debug logs)"""
+	"""Re-analyze a specific job using smart Robot Framework log extraction (failed tests only)"""
 	data = request.json or {}
 
 	job_name = data.get('job_name')
@@ -2641,39 +2641,68 @@ def reanalyze_job():
 	try:
 		analyzer = JenkinsAnalyzer(jenkins_url)
 
-		# Get console log
-		console_url = f"{jenkins_url}/job/{job_name}/{build_number}/consoleText"
-		console_response = analyzer.session.get(console_url, timeout=30)
-		console_log = console_response.text if console_response.status_code == 200 else ""
+		# Try smart Robot Framework log extraction first (extracts only failed test chunks)
+		print(f"🔍 Attempting smart Robot Framework log extraction for {job_name} #{build_number}")
+		robot_log = analyzer._get_robot_framework_log(job_name, build_number)
 
-		# Try to get debug/additional logs
-		debug_logs = []
+		log_to_analyze = None
+		log_type = 'console'
+		log_sources = []
 
-		# Try common debug log locations
-		debug_urls = [
-			f"{jenkins_url}/job/{job_name}/{build_number}/artifact/debug.log",
-			f"{jenkins_url}/job/{job_name}/{build_number}/artifact/logs/debug.log",
-			f"{jenkins_url}/job/{job_name}/{build_number}/artifact/test-output/debug.log",
-		]
+		if robot_log and robot_log.startswith('PASSED|||'):
+			# All tests passed
+			parts = robot_log.split('|||')
+			passed_count = int(parts[1]) if len(parts) > 1 else 0
+			total_count = int(parts[2]) if len(parts) > 2 else 0
 
-		for debug_url in debug_urls:
-			try:
-				debug_response = analyzer.session.get(debug_url, timeout=15)
-				if debug_response.status_code == 200:
-					debug_logs.append(debug_response.text)
-					print(f"✅ Found debug log at: {debug_url}")
-					break  # Use first found debug log
-			except:
-				pass
+			analysis = f'✅ All tests passed ({passed_count}/{total_count} tests) - No failures to analyze'
+			log_type = 'passed'
+			log_sources = ['robot_framework']
 
-		# Combine logs for comprehensive analysis
-		combined_log = console_log
-		if debug_logs:
-			combined_log += "\n\n=== DEBUG LOG ===\n\n" + "\n\n".join(debug_logs)
+			# Update database
+			save_job_analysis(
+				job_name=job_name,
+				build_number=build_number,
+				jenkins_url=jenkins_url,
+				analysis_text=analysis,
+				status='reanalyzed',
+				log_type=log_type,
+				log_size=0,
+				passed_tests=passed_count,
+				failed_tests=0,
+				total_tests=total_count,
+				model_used=model,
+				date_key=time.strftime('%Y-%m-%d')
+			)
 
-		# Perform deep RCA analysis with combined logs
+			return jsonify({
+				'status': 'success',
+				'job_name': job_name,
+				'build_number': build_number,
+				'analysis': analysis,
+				'log_sources': log_sources,
+				'log_size': 0
+			})
+
+		elif robot_log:
+			# Smart extraction succeeded - use extracted failed test chunks only
+			print(f"✅ Smart extraction succeeded - analyzing only failed test chunks ({len(robot_log)} chars)")
+			log_to_analyze = robot_log
+			log_type = 'robot_smart_extraction'
+			log_sources = ['robot_framework', 'debug.log', 'console']
+		else:
+			# Fallback to console log if Robot Framework extraction failed
+			print(f"⚠️ Robot Framework extraction failed - falling back to console log")
+			console_url = f"{jenkins_url}/job/{job_name}/{build_number}/consoleText"
+			console_response = analyzer.session.get(console_url, timeout=30)
+			log_to_analyze = console_response.text if console_response.status_code == 200 else ""
+			log_type = 'console'
+			log_sources = ['console']
+
+		# Perform deep RCA analysis
+		print(f"🔬 Performing RCA analysis on {len(log_to_analyze)} chars of log data")
 		analysis = analyzer.analyze_log_chunked(
-			combined_log, job_name, build_number, model, groq_api_key,
+			log_to_analyze, job_name, build_number, model, groq_api_key,
 			rca_mode=True, enable_fallback=True
 		)
 
@@ -2684,8 +2713,8 @@ def reanalyze_job():
 			jenkins_url=jenkins_url,
 			analysis_text=analysis,
 			status='reanalyzed',
-			log_type='console+debug' if debug_logs else 'console',
-			log_size=len(combined_log),
+			log_type=log_type,
+			log_size=len(log_to_analyze),
 			passed_tests=0,  # Will be extracted from analysis if needed
 			failed_tests=0,
 			total_tests=0,
@@ -2698,12 +2727,14 @@ def reanalyze_job():
 			'job_name': job_name,
 			'build_number': build_number,
 			'analysis': analysis,
-			'log_sources': ['console'] + (['debug'] if debug_logs else []),
-			'log_size': len(combined_log)
+			'log_sources': log_sources,
+			'log_size': len(log_to_analyze)
 		})
 
 	except Exception as e:
 		print(f"Error re-analyzing job: {e}")
+		import traceback
+		traceback.print_exc()
 		return jsonify({'error': str(e)}), 500
 
 
