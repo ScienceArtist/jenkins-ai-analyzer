@@ -201,6 +201,80 @@
         }
         .pipeline-body.expanded { display: block; }
 
+        /* Pipeline View Styles */
+        .pipeline-flow {
+            display: flex;
+            gap: 15px;
+            overflow-x: auto;
+            padding: 20px;
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .pipeline-stage {
+            min-width: 200px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 15px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+        }
+        .pipeline-stage:hover {
+            border-color: var(--accent-color);
+            box-shadow: 0 4px 12px var(--shadow);
+        }
+        .stage-header {
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .stage-job {
+            background: var(--bg-secondary);
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border-left: 4px solid #ccc;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .stage-job:hover {
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px var(--shadow);
+        }
+        .stage-job.passed {
+            border-left-color: #10b981;
+            background: linear-gradient(90deg, rgba(16, 185, 129, 0.1) 0%, var(--bg-secondary) 100%);
+        }
+        .stage-job.failed {
+            border-left-color: #ef4444;
+            background: linear-gradient(90deg, rgba(239, 68, 68, 0.1) 0%, var(--bg-secondary) 100%);
+        }
+        .stage-job.unstable {
+            border-left-color: #f59e0b;
+            background: linear-gradient(90deg, rgba(245, 158, 11, 0.1) 0%, var(--bg-secondary) 100%);
+        }
+        .stage-job-name {
+            font-weight: bold;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+        .stage-job-build {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+        }
+        .stage-connector {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 30px;
+            color: var(--text-secondary);
+            font-size: 1.5em;
+        }
+
         .job-item {
             background: var(--bg-tertiary);
             padding: 15px;
@@ -269,24 +343,68 @@
 
         <div class="controls">
             <button onclick="refreshDashboard()">🔄 Refresh Latest</button>
-            <button onclick="showDateRangeModal()">📅 Date Range</button>
+            <button onclick="showFilterModal()">🔍 Filter Results</button>
             <button onclick="showNewFailures()">🔥 New Failures</button>
             <button onclick="triggerDailyAnalysis()">▶️ Run Analysis Now</button>
             <button onclick="exportResults()">📥 Export JSON</button>
+            <div style="display: inline-block; margin-left: 20px;">
+                <label style="color: var(--text-primary); font-weight: bold;">View:</label>
+                <select id="viewMode" onchange="changeViewMode()" style="padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); cursor: pointer; margin-left: 5px;">
+                    <option value="pipeline">🔀 Pipeline View</option>
+                    <option value="list">📋 List View</option>
+                </select>
+            </div>
         </div>
 
-        <div id="filterControls" style="background: var(--bg-secondary); padding: 15px; border-radius: 10px; margin-bottom: 20px; box-shadow: var(--card-shadow); display: none; transition: background 0.3s;">
-            <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                <div>
-                    <label style="font-weight: bold; margin-right: 10px; color: var(--text-primary);">Start Date:</label>
-                    <input type="date" id="startDate" style="padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+        <div id="filterControls" style="background: var(--bg-secondary); padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: var(--card-shadow); display: none; transition: background 0.3s;">
+            <h3 style="margin-top: 0; color: var(--text-primary);">🔍 Filter Dashboard Results</h3>
+            <div style="display: flex; flex-direction: column; gap: 15px;">
+                <!-- Date Range Filter -->
+                <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                    <div>
+                        <label style="font-weight: bold; margin-right: 10px; color: var(--text-primary);">Start Date:</label>
+                        <input type="date" id="startDate" style="padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                    </div>
+                    <div>
+                        <label style="font-weight: bold; margin-right: 10px; color: var(--text-primary);">End Date:</label>
+                        <input type="date" id="endDate" style="padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                    </div>
                 </div>
+
+                <!-- Job Names Filter -->
                 <div>
-                    <label style="font-weight: bold; margin-right: 10px; color: var(--text-primary);">End Date:</label>
-                    <input type="date" id="endDate" style="padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                    <label style="font-weight: bold; display: block; margin-bottom: 5px; color: var(--text-primary);">
+                        Job Names (comma-separated):
+                        <span style="font-weight: normal; font-size: 0.9em; color: var(--text-secondary);">e.g., nightly, full-regression, upgrade-automatin</span>
+                    </label>
+                    <input type="text" id="jobNamesFilter" placeholder="Leave empty to show all jobs"
+                           style="width: 100%; max-width: 600px; padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
                 </div>
-                <button onclick="loadDateRange()" style="padding: 8px 16px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Apply</button>
-                <button onclick="hideFilters()" style="padding: 8px 16px; background: #999; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+
+                <!-- CalVer Build Filter -->
+                <div>
+                    <label style="font-weight: bold; display: block; margin-bottom: 5px; color: var(--text-primary);">
+                        Release Build (CalVer):
+                        <span style="font-weight: normal; font-size: 0.9em; color: var(--text-secondary);">e.g., 2024.02.15, 2024.w07</span>
+                    </label>
+                    <input type="text" id="calverFilter" placeholder="Leave empty to show all builds"
+                           style="width: 100%; max-width: 300px; padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                </div>
+
+                <!-- Hide Empty Jobs -->
+                <div>
+                    <label style="font-weight: bold; color: var(--text-primary); cursor: pointer;">
+                        <input type="checkbox" id="hideEmptyJobs" style="margin-right: 8px; cursor: pointer;">
+                        Hide jobs with "No builds found"
+                    </label>
+                </div>
+
+                <!-- Action Buttons -->
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button onclick="applyFilters()" style="padding: 10px 20px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Apply Filters</button>
+                    <button onclick="clearFilters()" style="padding: 10px 20px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear All</button>
+                    <button onclick="hideFilters()" style="padding: 10px 20px; background: #999; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                </div>
             </div>
         </div>
 
@@ -316,6 +434,86 @@
 
     <script>
         let currentData = null;
+        let currentViewMode = 'pipeline';
+
+        // Load filters from URL on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+
+            // Load view mode from URL or localStorage
+            const viewMode = urlParams.get('view') || localStorage.getItem('dashboardViewMode') || 'pipeline';
+            currentViewMode = viewMode;
+            document.getElementById('viewMode').value = viewMode;
+
+            // Check if there are filter parameters in URL
+            const startDate = urlParams.get('start_date');
+            const endDate = urlParams.get('end_date');
+            const jobNames = urlParams.get('job_names');
+            const calver = urlParams.get('calver');
+            const hideEmpty = urlParams.get('hide_empty');
+
+            if (startDate || endDate || jobNames || calver || hideEmpty) {
+                // Apply filters from URL
+                applyFiltersFromURL(urlParams);
+            } else {
+                // Load default dashboard
+                refreshDashboard();
+            }
+        });
+
+        function changeViewMode() {
+            currentViewMode = document.getElementById('viewMode').value;
+            localStorage.setItem('dashboardViewMode', currentViewMode);
+
+            // Update URL with view parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            urlParams.set('view', currentViewMode);
+            window.history.replaceState({}, '', `${window.location.pathname}?${urlParams.toString()}`);
+
+            // Re-render current data with new view
+            if (currentData) {
+                if (currentData.results) {
+                    renderFilteredResults(currentData);
+                } else {
+                    renderDashboard(currentData);
+                }
+            }
+        }
+
+        async function applyFiltersFromURL(urlParams) {
+            const startDate = urlParams.get('start_date');
+            const endDate = urlParams.get('end_date');
+            const jobNames = urlParams.get('job_names');
+            const calver = urlParams.get('calver');
+            const hideEmpty = urlParams.get('hide_empty');
+
+            try {
+                document.getElementById('pipelineContainer').innerHTML = '<div class="loading">Loading filtered results...</div>';
+
+                const params = new URLSearchParams();
+                if (startDate) params.append('start_date', startDate);
+                if (endDate) params.append('end_date', endDate);
+                if (jobNames) params.append('job_names', jobNames);
+                if (calver) params.append('calver', calver);
+                if (hideEmpty) params.append('hide_empty', hideEmpty);
+
+                const response = await fetch(`/api/dashboard/filter?${params.toString()}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('pipelineContainer').innerHTML =
+                        `<div class="error-message">${data.error}</div>`;
+                    return;
+                }
+
+                currentData = data;
+                renderFilteredResults(data);
+
+            } catch (error) {
+                document.getElementById('pipelineContainer').innerHTML =
+                    `<div class="error-message">Error: ${error.message}</div>`;
+            }
+        }
 
         async function refreshDashboard() {
             try {
@@ -339,7 +537,7 @@
             }
         }
 
-        function showDateRangeModal() {
+        function showFilterModal() {
             document.getElementById('filterControls').style.display = 'block';
             // Set default dates (last 7 days)
             const endDate = new Date();
@@ -354,12 +552,24 @@
             document.getElementById('filterControls').style.display = 'none';
         }
 
-        async function loadDateRange() {
+        function clearFilters() {
+            document.getElementById('startDate').value = '';
+            document.getElementById('endDate').value = '';
+            document.getElementById('jobNamesFilter').value = '';
+            document.getElementById('calverFilter').value = '';
+            document.getElementById('hideEmptyJobs').checked = false;
+        }
+
+        async function applyFilters() {
             const startDate = document.getElementById('startDate').value;
             const endDate = document.getElementById('endDate').value;
+            const jobNames = document.getElementById('jobNamesFilter').value;
+            const calver = document.getElementById('calverFilter').value;
+            const hideEmpty = document.getElementById('hideEmptyJobs').checked;
 
-            if (!startDate || !endDate) {
-                alert('Please select both start and end dates');
+            // If no filters applied, just refresh
+            if (!startDate && !endDate && !jobNames && !calver && !hideEmpty) {
+                alert('Please set at least one filter');
                 return;
             }
 
@@ -367,7 +577,19 @@
                 document.getElementById('pipelineContainer').innerHTML = '<div class="loading">Loading...</div>';
                 hideFilters();
 
-                const response = await fetch(`/api/dashboard/date-range?start_date=${startDate}&end_date=${endDate}`);
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (startDate) params.append('start_date', startDate);
+                if (endDate) params.append('end_date', endDate);
+                if (jobNames) params.append('job_names', jobNames);
+                if (calver) params.append('calver', calver);
+                if (hideEmpty) params.append('hide_empty', 'true');
+                params.append('view', currentViewMode);
+
+                // Update URL with filter parameters (shareable link!)
+                window.history.pushState({}, '', `${window.location.pathname}?${params.toString()}`);
+
+                const response = await fetch(`/api/dashboard/filter?${params.toString()}`);
                 const data = await response.json();
 
                 if (data.error) {
@@ -377,12 +599,17 @@
                 }
 
                 currentData = data;
-                renderDateRangeResults(data);
+                renderFilteredResults(data);
 
             } catch (error) {
                 document.getElementById('pipelineContainer').innerHTML =
                     `<div class="error-message">Error: ${error.message}</div>`;
             }
+        }
+
+        // Keep old function for backward compatibility
+        async function loadDateRange() {
+            applyFilters();
         }
 
         async function showNewFailures() {
@@ -471,7 +698,218 @@
             }, 10000); // Poll every 10 seconds
         }
 
+        function renderFilteredResults(data) {
+            // Update header with filter info
+            let headerText = 'Filtered Results';
+            if (data.start_date && data.end_date) {
+                headerText = `Date Range: ${data.start_date} to ${data.end_date}`;
+            }
+            if (data.job_names) {
+                headerText += ` | Jobs: ${data.job_names}`;
+            }
+            if (data.calver) {
+                headerText += ` | Build: ${data.calver}`;
+            }
+            document.getElementById('lastUpdated').textContent = headerText;
+
+            // Calculate stats
+            const results = data.results || [];
+            const totalDays = results.length;
+            const totalJobs = results.reduce((sum, day) => sum + day.total_jobs, 0);
+            const totalPassed = results.reduce((sum, day) => sum + day.passed_jobs, 0);
+            const totalFailed = results.reduce((sum, day) => sum + day.failed_jobs, 0);
+
+            // Update stats
+            document.getElementById('totalPipelines').textContent = totalDays;
+            document.getElementById('totalJobs').textContent = totalJobs;
+            document.getElementById('passedJobs').textContent = totalPassed;
+            document.getElementById('failedJobs').textContent = totalFailed;
+
+            // Render results by date
+            const container = document.getElementById('pipelineContainer');
+            container.innerHTML = '';
+
+            if (results.length === 0) {
+                container.innerHTML = '<div class="loading">No results found matching your filters.</div>';
+                return;
+            }
+
+            // Render based on view mode
+            if (currentViewMode === 'pipeline') {
+                renderPipelineView(results);
+            } else {
+                renderListView(results);
+            }
+        }
+
+        function renderPipelineView(results) {
+            const container = document.getElementById('pipelineContainer');
+
+            results.forEach((dayData, index) => {
+                // Group jobs by common prefixes (stages)
+                const stages = groupJobsByStage(dayData.jobs);
+
+                const dateHeader = document.createElement('h2');
+                dateHeader.style.cssText = 'color: var(--text-primary); margin: 20px 0 10px 0;';
+                dateHeader.textContent = `📅 ${dayData.date} (${dayData.total_jobs} jobs | ${dayData.passed_jobs} passed | ${dayData.failed_jobs} failed)`;
+                container.appendChild(dateHeader);
+
+                const pipelineFlow = document.createElement('div');
+                pipelineFlow.className = 'pipeline-flow';
+
+                const stageNames = Object.keys(stages);
+                stageNames.forEach((stageName, idx) => {
+                    const stageDiv = document.createElement('div');
+                    stageDiv.className = 'pipeline-stage';
+
+                    const stageHeader = document.createElement('div');
+                    stageHeader.className = 'stage-header';
+                    stageHeader.innerHTML = `🔹 ${stageName}`;
+                    stageDiv.appendChild(stageHeader);
+
+                    stages[stageName].forEach(job => {
+                        const jobDiv = document.createElement('div');
+                        const statusClass = job.status === 'passed' ? 'passed' : (job.failed_tests > 0 ? 'failed' : 'unstable');
+                        const statusIcon = job.status === 'passed' ? '✅' : (job.failed_tests > 0 ? '❌' : '⚠️');
+
+                        jobDiv.className = `stage-job ${statusClass}`;
+                        jobDiv.innerHTML = `
+                            <div class="stage-job-name">${statusIcon} ${job.job_name}</div>
+                            <div class="stage-job-build">#${job.build_number}</div>
+                        `;
+                        jobDiv.onclick = () => showJobDetails(job);
+                        stageDiv.appendChild(jobDiv);
+                    });
+
+                    pipelineFlow.appendChild(stageDiv);
+
+                    // Add connector arrow between stages
+                    if (idx < stageNames.length - 1) {
+                        const connector = document.createElement('div');
+                        connector.className = 'stage-connector';
+                        connector.innerHTML = '→';
+                        pipelineFlow.appendChild(connector);
+                    }
+                });
+
+                container.appendChild(pipelineFlow);
+            });
+        }
+
+        function groupJobsByStage(jobs) {
+            const stages = {};
+
+            jobs.forEach(job => {
+                const jobName = job.job_name;
+                let stageName = 'Other';
+
+                // Try to extract stage from job name
+                if (jobName.includes('nightly')) {
+                    stageName = 'Nightly';
+                } else if (jobName.includes('regression')) {
+                    stageName = 'Regression';
+                } else if (jobName.includes('upgrade')) {
+                    stageName = 'Upgrade';
+                } else if (jobName.includes('virtual')) {
+                    stageName = 'Virtual';
+                } else if (jobName.includes('automatin')) {
+                    stageName = 'Automatin';
+                } else {
+                    // Use first part of job name as stage
+                    const parts = jobName.split('-');
+                    if (parts.length > 1) {
+                        stageName = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+                    }
+                }
+
+                if (!stages[stageName]) {
+                    stages[stageName] = [];
+                }
+                stages[stageName].push(job);
+            });
+
+            return stages;
+        }
+
+        function showJobDetails(job) {
+            const modal = document.createElement('div');
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;';
+
+            const statusIcon = job.status === 'passed' ? '✅' : (job.failed_tests > 0 ? '❌' : '⚠️');
+
+            modal.innerHTML = `
+                <div style="background: var(--bg-secondary); border-radius: 10px; max-width: 800px; max-height: 90vh; overflow-y: auto; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.5);">
+                    <h2 style="color: var(--text-primary); margin-top: 0;">${statusIcon} ${job.job_name} #${job.build_number}</h2>
+                    <div style="color: var(--text-secondary); margin-bottom: 20px;">
+                        Status: <strong>${job.status}</strong> |
+                        Tests: ${job.passed_tests}/${job.total_tests} passed
+                        ${job.failed_tests > 0 ? ` | <span style="color: #ef4444;">${job.failed_tests} failed</span>` : ''}
+                    </div>
+                    <div style="background: var(--bg-tertiary); padding: 20px; border-radius: 8px; white-space: pre-wrap; font-family: monospace; font-size: 0.9em; line-height: 1.6; color: var(--text-primary);">
+                        ${escapeHtml(job.analysis_text || 'No analysis available')}
+                    </div>
+                    <button onclick="this.parentElement.parentElement.remove()" style="margin-top: 20px; padding: 10px 20px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Close</button>
+                </div>
+            `;
+
+            modal.onclick = (e) => {
+                if (e.target === modal) modal.remove();
+            };
+
+            document.body.appendChild(modal);
+        }
+
+        function renderListView(results) {
+            const container = document.getElementById('pipelineContainer');
+
+            results.forEach((dayData, index) => {
+                const card = document.createElement('div');
+                card.className = 'pipeline-card';
+
+                let bodyHTML = '';
+                dayData.jobs.forEach(job => {
+                    const statusIcon = job.status === 'passed' ? '✅' : (job.failed_tests > 0 ? '❌' : '⚠️');
+                    bodyHTML += `
+                        <div class="job-item">
+                            <div class="job-header">
+                                <span class="job-name">${statusIcon} ${job.job_name} #${job.build_number}</span>
+                                <span class="job-status ${job.status}">${job.status}</span>
+                            </div>
+                            ${job.failed_tests > 0 ? `
+                                <div class="test-summary">
+                                    ❌ ${job.failed_tests} failed | ✅ ${job.passed_tests} passed | 📊 ${job.total_tests} total
+                                </div>
+                            ` : ''}
+                            <div class="analysis-section">
+                                <div class="analysis-text">${job.analysis_text || 'No analysis available'}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                card.innerHTML = `
+                    <div class="pipeline-header">
+                        <div class="pipeline-name">📅 ${dayData.date}</div>
+                        <div class="pipeline-status">
+                            ${dayData.total_jobs} jobs | ${dayData.passed_jobs} passed | ${dayData.failed_jobs} failed
+                        </div>
+                    </div>
+                    <div class="pipeline-body">
+                        ${bodyHTML}
+                    </div>
+                `;
+
+                container.appendChild(card);
+            });
+        }
+
         function renderDateRangeResults(data) {
+            // Just use the new filtered results renderer
+            renderFilteredResults(data);
+        }
+
+        // Legacy function kept for compatibility
+        function renderDateRangeResultsOld(data) {
             // Update header
             document.getElementById('lastUpdated').textContent =
                 `Date Range: ${data.start_date} to ${data.end_date}`;

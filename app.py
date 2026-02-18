@@ -2364,6 +2364,89 @@ def get_dashboard_date_range():
 		return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/dashboard/filter', methods=['GET'])
+def get_dashboard_filtered():
+	"""Get analyses with multiple filters: date range, job names, calver"""
+	start_date = request.args.get('start_date')
+	end_date = request.args.get('end_date')
+	job_names_str = request.args.get('job_names', '')
+	calver = request.args.get('calver', '')
+	hide_empty = request.args.get('hide_empty', 'false').lower() == 'true'
+	jenkins_url = request.args.get('jenkins_url')
+
+	try:
+		# Get base data (all or date range)
+		if start_date and end_date:
+			analyses = get_analyses_by_date_range(start_date, end_date, jenkins_url)
+		else:
+			# Get last 30 days if no date range specified
+			end_date_obj = datetime.now()
+			start_date_obj = end_date_obj - timedelta(days=30)
+			start_date = start_date_obj.strftime('%Y-%m-%d')
+			end_date = end_date_obj.strftime('%Y-%m-%d')
+			analyses = get_analyses_by_date_range(start_date, end_date, jenkins_url)
+
+		# Parse job names filter
+		job_names_filter = []
+		if job_names_str:
+			job_names_filter = [name.strip() for name in job_names_str.split(',') if name.strip()]
+
+		# Apply filters
+		filtered_analyses = []
+		for analysis in analyses:
+			# Filter out "No builds found" if requested
+			if hide_empty:
+				analysis_text = analysis.get('analysis_text', '').lower()
+				if 'no builds found' in analysis_text or analysis.get('build_number', 0) == 0:
+					continue
+
+			# Filter by job names (partial match)
+			if job_names_filter:
+				job_name = analysis.get('job_name', '').lower()
+				if not any(filter_name.lower() in job_name for filter_name in job_names_filter):
+					continue
+
+			# Filter by CalVer (check if build number or job name contains calver)
+			if calver:
+				job_name = analysis.get('job_name', '')
+				build_number = str(analysis.get('build_number', ''))
+				if calver not in job_name and calver not in build_number:
+					continue
+
+			filtered_analyses.append(analysis)
+
+		# Group by date
+		by_date = {}
+		for analysis in filtered_analyses:
+			date_key = analysis['date_key']
+			if date_key not in by_date:
+				by_date[date_key] = {
+					'date': date_key,
+					'jobs': [],
+					'total_jobs': 0,
+					'passed_jobs': 0,
+					'failed_jobs': 0
+				}
+
+			by_date[date_key]['jobs'].append(analysis)
+			by_date[date_key]['total_jobs'] += 1
+			if analysis['status'] == 'passed':
+				by_date[date_key]['passed_jobs'] += 1
+			elif analysis['failed_tests'] > 0:
+				by_date[date_key]['failed_jobs'] += 1
+
+		return jsonify({
+			'start_date': start_date,
+			'end_date': end_date,
+			'job_names': job_names_str,
+			'calver': calver,
+			'results': list(by_date.values())
+		})
+
+	except Exception as e:
+		return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/dashboard/new-failures', methods=['GET'])
 def get_new_failures():
 	"""Get new failures in the last N days"""
