@@ -914,13 +914,18 @@
             // Update stats
             document.getElementById('totalPipelines').textContent = data.count;
             document.getElementById('totalJobs').textContent = data.failures.length;
-            document.getElementById('successRate').textContent = data.days;
-            document.getElementById('lastAnalysis').textContent = '-';
+
+            const passedEl = document.getElementById('passedJobs');
+            const failedEl = document.getElementById('failedJobs');
+            if (passedEl) passedEl.textContent = '0';
+            if (failedEl) failedEl.textContent = data.failures.length;
 
             // Update stat labels
-            document.querySelector('#totalPipelines').parentElement.querySelector('.label').textContent = 'New Failures';
-            document.querySelector('#totalJobs').parentElement.querySelector('.label').textContent = 'Total Jobs';
-            document.querySelector('#successRate').parentElement.querySelector('.label').textContent = 'Days Analyzed';
+            const labels = document.querySelectorAll('.stat-card .label');
+            if (labels[0]) labels[0].textContent = 'New Failures';
+            if (labels[1]) labels[1].textContent = 'Total Jobs';
+            if (labels[2]) labels[2].textContent = 'Passed Jobs';
+            if (labels[3]) labels[3].textContent = 'Failed Jobs';
 
             // Render failures
             const container = document.getElementById('pipelineContainer');
