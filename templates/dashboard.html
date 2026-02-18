@@ -1187,11 +1187,17 @@
             }
         })();
 
-        // Auto-refresh every 5 minutes
-        setInterval(refreshDashboard, 5 * 60 * 1000);
-
-        // Load on page load
-        window.addEventListener('DOMContentLoaded', refreshDashboard);
+        // Auto-refresh every 5 minutes (respects URL filters)
+        setInterval(() => {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('start_date') || urlParams.has('end_date') || urlParams.has('job_names') || urlParams.has('calver') || urlParams.has('hide_empty')) {
+                // Re-apply filters from URL
+                applyFiltersFromURL(urlParams);
+            } else {
+                // Refresh default dashboard
+                refreshDashboard();
+            }
+        }, 5 * 60 * 1000);
     </script>
 </body>
 </html>
