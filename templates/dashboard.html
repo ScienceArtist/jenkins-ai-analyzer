@@ -744,6 +744,7 @@
 
         function renderPipelineView(results) {
             const container = document.getElementById('pipelineContainer');
+            container.innerHTML = ''; // Clear container first
 
             results.forEach((dayData, index) => {
                 // Group jobs by common prefixes (stages)
