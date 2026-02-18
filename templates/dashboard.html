@@ -1424,15 +1424,22 @@
                             name: job.job_name,
                             build: job.build_number,
                             failed_tests: job.failed_tests || 0,
-                            total_tests: job.total_tests || 0
+                            total_tests: job.total_tests || 0,
+                            status: job.status
                         };
 
-                        if (job.status === 'failed' || job.failed_tests > 0) {
+                        // Categorize jobs properly:
+                        // - Failed: status is explicitly 'failed'
+                        // - Unstable: status is 'success' or 'passed' but has failed tests
+                        // - Passed: status is 'success' or 'passed' with no failed tests
+                        if (job.status === 'failed') {
                             failedJobs.push(jobInfo);
+                        } else if ((job.status === 'success' || job.status === 'passed') && job.failed_tests > 0) {
+                            unstableJobs.push(jobInfo);
+                        } else if (job.status === 'success' || job.status === 'passed') {
+                            passedJobs.push(jobInfo);
                         } else if (job.status === 'unstable') {
                             unstableJobs.push(jobInfo);
-                        } else if (job.status === 'passed' || job.status === 'success') {
-                            passedJobs.push(jobInfo);
                         }
                     });
                 }

@@ -2556,8 +2556,8 @@ def dashboard_chat():
 
 		unstable_jobs_text = ""
 		if unstable_job_list:
-			unstable_jobs_text = "\n\nUnstable Jobs:\n" + "\n".join([
-				f"- {job['name']} #{job['build']}"
+			unstable_jobs_text = "\n\nUnstable Jobs (passed but with test failures):\n" + "\n".join([
+				f"- {job['name']} #{job['build']}" + (f" ({job['failed_tests']}/{job['total_tests']} tests failed)" if job.get('failed_tests', 0) > 0 else "")
 				for job in unstable_job_list
 			])
 
