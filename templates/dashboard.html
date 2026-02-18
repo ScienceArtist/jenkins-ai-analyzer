@@ -418,12 +418,12 @@
                 <div class="value" id="totalJobs">-</div>
             </div>
             <div class="stat-card">
-                <div class="label">Success Rate</div>
-                <div class="value" id="successRate">-</div>
+                <div class="label">Passed Jobs</div>
+                <div class="value" id="passedJobs" style="color: #10b981;">-</div>
             </div>
             <div class="stat-card">
-                <div class="label">Last Analysis</div>
-                <div class="value" id="lastAnalysis" style="font-size: 1.2em;">-</div>
+                <div class="label">Failed Jobs</div>
+                <div class="value" id="failedJobs" style="color: #ef4444;">-</div>
             </div>
         </div>
 
@@ -1089,21 +1089,73 @@
                 `Last updated: ${data.date || 'N/A'}`;
 
             // Update stats from database-backed data
-            document.getElementById('totalPipelines').textContent = data.total_jobs || 0;
-            document.getElementById('totalJobs').textContent = data.total_tests || 0;
-            document.getElementById('successRate').textContent = `${data.passed_jobs || 0}/${data.total_jobs || 0}`;
-            document.getElementById('lastAnalysis').textContent = data.failed_jobs || 0;
+            const totalJobs = data.total_jobs || 0;
+            const passedJobs = data.passed_jobs || 0;
+            const failedJobs = data.failed_jobs || 0;
 
-            // Render analyses
+            document.getElementById('totalPipelines').textContent = '1';
+            document.getElementById('totalJobs').textContent = totalJobs;
+
+            // Update passedJobs and failedJobs if they exist
+            const passedEl = document.getElementById('passedJobs');
+            const failedEl = document.getElementById('failedJobs');
+            if (passedEl) passedEl.textContent = passedJobs;
+            if (failedEl) failedEl.textContent = failedJobs;
+
+            // Fallback for old stat elements
+            const successRateEl = document.getElementById('successRate');
+            const lastAnalysisEl = document.getElementById('lastAnalysis');
+            if (successRateEl) successRateEl.textContent = `${passedJobs}/${totalJobs}`;
+            if (lastAnalysisEl) lastAnalysisEl.textContent = failedJobs;
+
+            // Convert to format expected by renderFilteredResults
+            const analyses = data.analyses || [];
+            if (analyses.length === 0) {
+                document.getElementById('pipelineContainer').innerHTML = '<div class="loading">No analyses available yet. Run daily analysis first.</div>';
+                return;
+            }
+
+            // Group analyses by date
+            const byDate = {};
+            analyses.forEach(analysis => {
+                const dateKey = analysis.date_key || data.date || 'Unknown';
+                if (!byDate[dateKey]) {
+                    byDate[dateKey] = {
+                        date: dateKey,
+                        jobs: [],
+                        total_jobs: 0,
+                        passed_jobs: 0,
+                        failed_jobs: 0
+                    };
+                }
+                byDate[dateKey].jobs.push(analysis);
+                byDate[dateKey].total_jobs++;
+                if (analysis.status === 'passed') {
+                    byDate[dateKey].passed_jobs++;
+                } else if (analysis.failed_tests > 0) {
+                    byDate[dateKey].failed_jobs++;
+                }
+            });
+
+            // Use the same rendering logic as filtered results
+            const formattedData = {
+                results: Object.values(byDate)
+            };
+
+            // Render based on view mode
+            if (currentViewMode === 'pipeline') {
+                renderPipelineView(formattedData.results);
+            } else {
+                renderListView(formattedData.results);
+            }
+        }
+
+        function renderDashboardOld(data) {
+            // Old rendering function kept for reference
             const container = document.getElementById('pipelineContainer');
             container.innerHTML = '';
 
             const analyses = data.analyses || [];
-            if (analyses.length === 0) {
-                container.innerHTML = '<div class="loading">No analyses available yet. Run daily analysis first.</div>';
-                return;
-            }
-
             analyses.forEach((analysis, index) => {
                 const card = document.createElement('div');
                 card.className = 'pipeline-card';
