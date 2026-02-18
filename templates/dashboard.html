@@ -1,16 +1,78 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jenkins Analysis Dashboard</title>
     <style>
+        :root[data-theme="light"] {
+            --bg-primary: #f5f7fa;
+            --bg-secondary: white;
+            --bg-tertiary: #f8f9fa;
+            --text-primary: #333;
+            --text-secondary: #666;
+            --border-color: #ddd;
+            --border-color-light: #e0e0e0;
+            --accent-color: #667eea;
+            --accent-hover: #5568d3;
+            --success-color: #4caf50;
+            --error-color: #f44336;
+            --warning-color: #ff9800;
+            --shadow: rgba(0,0,0,0.05);
+            --card-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        :root[data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #242424;
+            --text-primary: #e0e0e0;
+            --text-secondary: #b0b0b0;
+            --border-color: #404040;
+            --border-color-light: #353535;
+            --accent-color: #7c8cff;
+            --accent-hover: #6a7bef;
+            --success-color: #4caf50;
+            --error-color: #f44336;
+            --warning-color: #ff9800;
+            --shadow: rgba(0,0,0,0.3);
+            --card-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f5f7fa;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             padding: 20px;
+            transition: background 0.3s, color 0.3s;
         }
+
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            border-radius: 50px;
+            padding: 10px 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.1em;
+            box-shadow: var(--card-shadow);
+            z-index: 1000;
+            transition: all 0.3s;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        .theme-toggle:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px var(--shadow);
+            border-color: var(--accent-color);
+        }
+
         .container { max-width: 1400px; margin: 0 auto; }
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -18,7 +80,7 @@
             padding: 30px;
             border-radius: 10px;
             margin-bottom: 30px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 6px var(--shadow);
         }
         .header h1 { font-size: 2em; margin-bottom: 10px; }
         .header .subtitle { opacity: 0.9; font-size: 1.1em; }
@@ -27,17 +89,33 @@
             font-size: 0.9em;
             opacity: 0.8;
         }
+        .header .nav-link {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .header .nav-link:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
 
         .controls {
-            background: white;
+            background: var(--bg-secondary);
             padding: 20px;
             border-radius: 10px;
             margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            box-shadow: var(--card-shadow);
+            transition: background 0.3s;
         }
         .controls button {
             padding: 12px 24px;
-            background: #667eea;
+            background: var(--accent-color);
             color: white;
             border: none;
             border-radius: 6px;
@@ -46,12 +124,15 @@
             margin-right: 10px;
             transition: all 0.2s;
         }
-        .controls button:hover { background: #5568d3; transform: translateY(-2px); }
+        .controls button:hover { background: var(--accent-hover); transform: translateY(-2px); }
         .controls select {
             padding: 10px;
-            border: 2px solid #ddd;
+            border: 2px solid var(--border-color);
             border-radius: 6px;
             margin-right: 10px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: all 0.3s;
         }
 
         .stats-grid {
@@ -61,14 +142,15 @@
             margin-bottom: 30px;
         }
         .stat-card {
-            background: white;
+            background: var(--bg-secondary);
             padding: 25px;
             border-radius: 10px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            border-left: 4px solid #667eea;
+            box-shadow: var(--card-shadow);
+            border-left: 4px solid var(--accent-color);
+            transition: all 0.3s;
         }
         .stat-card .label {
-            color: #666;
+            color: var(--text-secondary);
             font-size: 0.9em;
             margin-bottom: 8px;
             text-transform: uppercase;
@@ -77,7 +159,7 @@
         .stat-card .value {
             font-size: 2.5em;
             font-weight: bold;
-            color: #333;
+            color: var(--text-primary);
         }
 
         .pipeline-grid {
@@ -85,14 +167,14 @@
             gap: 20px;
         }
         .pipeline-card {
-            background: white;
+            background: var(--bg-secondary);
             border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            box-shadow: var(--card-shadow);
             overflow: hidden;
             transition: all 0.3s;
         }
         .pipeline-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 12px var(--shadow);
             transform: translateY(-2px);
         }
         .pipeline-header {
@@ -114,29 +196,32 @@
         .pipeline-body {
             padding: 20px;
             display: none;
+            background: var(--bg-secondary);
+            transition: background 0.3s;
         }
         .pipeline-body.expanded { display: block; }
 
         .job-item {
-            background: #f8f9fa;
+            background: var(--bg-tertiary);
             padding: 15px;
             margin-bottom: 15px;
             border-radius: 8px;
-            border-left: 3px solid #667eea;
+            border-left: 3px solid var(--accent-color);
+            transition: background 0.3s;
         }
         .job-item .job-title {
             font-weight: bold;
-            color: #333;
+            color: var(--text-primary);
             margin-bottom: 8px;
             font-size: 1.1em;
         }
         .job-item .job-meta {
-            color: #666;
+            color: var(--text-secondary);
             font-size: 0.9em;
             margin-bottom: 10px;
         }
         .job-item .analysis {
-            background: white;
+            background: var(--bg-secondary);
             padding: 15px;
             border-radius: 6px;
             white-space: pre-wrap;
@@ -145,39 +230,64 @@
             line-height: 1.6;
             max-height: 300px;
             overflow-y: auto;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s;
         }
 
-        .status-success { color: #28a745; }
-        .status-error { color: #dc3545; }
+        .status-success { color: var(--success-color); }
+        .status-error { color: var(--error-color); }
         .loading {
             text-align: center;
             padding: 40px;
-            color: #666;
+            color: var(--text-secondary);
             font-size: 1.2em;
         }
         .error-message {
-            background: #f8d7da;
-            color: #721c24;
+            background: var(--bg-secondary);
+            color: var(--error-color);
             padding: 20px;
             border-radius: 8px;
             margin: 20px 0;
+            border: 2px solid var(--error-color);
         }
     </style>
 </head>
 <body>
+    <div class="theme-toggle" onclick="toggleTheme()">
+        <span id="themeIcon">🌙</span>
+        <span id="themeText">Light Mode</span>
+    </div>
+
     <div class="container">
         <div class="header">
             <h1>📊 Jenkins Analysis Dashboard</h1>
             <div class="subtitle">Multi-Pipeline Daily Analysis Results</div>
             <div class="last-updated" id="lastUpdated">Loading...</div>
+            <a href="/" class="nav-link">🔍 Go to Analyzer</a>
         </div>
 
         <div class="controls">
-            <button onclick="refreshDashboard()">🔄 Refresh</button>
-            <select id="dateSelector" onchange="loadDateResults()">
-                <option value="latest">Latest Results</option>
-            </select>
+            <button onclick="refreshDashboard()">🔄 Refresh Latest</button>
+            <button onclick="showDateRangeModal()">📅 Date Range</button>
+            <button onclick="showNewFailures()">🔥 New Failures</button>
+            <button onclick="triggerDailyAnalysis()">▶️ Run Analysis Now</button>
             <button onclick="exportResults()">📥 Export JSON</button>
+        </div>
+
+        <div id="filterControls" style="background: var(--bg-secondary); padding: 15px; border-radius: 10px; margin-bottom: 20px; box-shadow: var(--card-shadow); display: none; transition: background 0.3s;">
+            <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                <div>
+                    <label style="font-weight: bold; margin-right: 10px; color: var(--text-primary);">Start Date:</label>
+                    <input type="date" id="startDate" style="padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                </div>
+                <div>
+                    <label style="font-weight: bold; margin-right: 10px; color: var(--text-primary);">End Date:</label>
+                    <input type="date" id="endDate" style="padding: 8px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                </div>
+                <button onclick="loadDateRange()" style="padding: 8px 16px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Apply</button>
+                <button onclick="hideFilters()" style="padding: 8px 16px; background: #999; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
         </div>
 
         <div class="stats-grid" id="statsGrid">
@@ -216,18 +326,278 @@
 
                 if (data.error) {
                     document.getElementById('pipelineContainer').innerHTML =
-                        `<div class="error-message">No results available. Run batch analysis first.</div>`;
+                        `<div class="error-message">No results available. Run daily analysis first.</div>`;
                     return;
                 }
 
                 currentData = data;
                 renderDashboard(data);
-                populateDateSelector();
 
             } catch (error) {
                 document.getElementById('pipelineContainer').innerHTML =
                     `<div class="error-message">Error loading dashboard: ${error.message}</div>`;
             }
+        }
+
+        function showDateRangeModal() {
+            document.getElementById('filterControls').style.display = 'block';
+            // Set default dates (last 7 days)
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 7);
+
+            document.getElementById('endDate').valueAsDate = endDate;
+            document.getElementById('startDate').valueAsDate = startDate;
+        }
+
+        function hideFilters() {
+            document.getElementById('filterControls').style.display = 'none';
+        }
+
+        async function loadDateRange() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            if (!startDate || !endDate) {
+                alert('Please select both start and end dates');
+                return;
+            }
+
+            try {
+                document.getElementById('pipelineContainer').innerHTML = '<div class="loading">Loading...</div>';
+                hideFilters();
+
+                const response = await fetch(`/api/dashboard/date-range?start_date=${startDate}&end_date=${endDate}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('pipelineContainer').innerHTML =
+                        `<div class="error-message">${data.error}</div>`;
+                    return;
+                }
+
+                currentData = data;
+                renderDateRangeResults(data);
+
+            } catch (error) {
+                document.getElementById('pipelineContainer').innerHTML =
+                    `<div class="error-message">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function showNewFailures() {
+            const days = prompt('Show new failures from last how many days?', '7');
+            if (!days) return;
+
+            try {
+                document.getElementById('pipelineContainer').innerHTML = '<div class="loading">Loading...</div>';
+
+                const response = await fetch(`/api/dashboard/new-failures?days=${days}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('pipelineContainer').innerHTML =
+                        `<div class="error-message">${data.error}</div>`;
+                    return;
+                }
+
+                currentData = data;
+                renderNewFailures(data);
+
+            } catch (error) {
+                document.getElementById('pipelineContainer').innerHTML =
+                    `<div class="error-message">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function triggerDailyAnalysis() {
+            if (!confirm('This will start a full analysis of all Jenkins jobs. This may take 30-60 minutes. Continue?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/run-daily-analysis', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+
+                alert(`Analysis started! Task ID: ${data.task_id}\n\nThe analysis will run in the background. Refresh the dashboard in 30-60 minutes to see results.`);
+
+                // Poll for status
+                pollAnalysisStatus(data.task_id);
+
+            } catch (error) {
+                alert('Error starting analysis: ' + error.message);
+            }
+        }
+
+        async function pollAnalysisStatus(taskId) {
+            const statusDiv = document.createElement('div');
+            statusDiv.id = 'analysisStatus';
+            statusDiv.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: #667eea; color: white; padding: 15px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000;';
+            statusDiv.innerHTML = '⏳ Analysis running...';
+            document.body.appendChild(statusDiv);
+
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/daily-analysis-status/${taskId}`);
+                    const data = await response.json();
+
+                    if (data.status === 'complete') {
+                        clearInterval(interval);
+                        statusDiv.innerHTML = `✅ Analysis complete! ${data.results.analyzed}/${data.results.total_jobs} jobs analyzed`;
+                        setTimeout(() => {
+                            statusDiv.remove();
+                            refreshDashboard();
+                        }, 3000);
+                    } else if (data.status === 'error') {
+                        clearInterval(interval);
+                        statusDiv.innerHTML = '❌ Analysis failed: ' + data.error;
+                        setTimeout(() => statusDiv.remove(), 5000);
+                    } else {
+                        statusDiv.innerHTML = '⏳ Analysis running...';
+                    }
+                } catch (error) {
+                    console.error('Error polling status:', error);
+                }
+            }, 10000); // Poll every 10 seconds
+        }
+
+        function renderDateRangeResults(data) {
+            // Update header
+            document.getElementById('lastUpdated').textContent =
+                `Date Range: ${data.start_date} to ${data.end_date}`;
+
+            // Calculate stats
+            const results = data.results || [];
+            const totalDays = results.length;
+            const totalJobs = results.reduce((sum, day) => sum + day.total_jobs, 0);
+            const totalPassed = results.reduce((sum, day) => sum + day.passed_jobs, 0);
+            const totalFailed = results.reduce((sum, day) => sum + day.failed_jobs, 0);
+
+            // Update stats
+            document.getElementById('totalPipelines').textContent = totalDays;
+            document.getElementById('totalJobs').textContent = totalJobs;
+            document.getElementById('successRate').textContent = totalPassed;
+            document.getElementById('lastAnalysis').textContent = totalFailed;
+
+            // Update stat labels
+            document.querySelector('#totalPipelines').parentElement.querySelector('.label').textContent = 'Days Analyzed';
+            document.querySelector('#successRate').parentElement.querySelector('.label').textContent = 'Passed Jobs';
+            document.querySelector('#lastAnalysis').parentElement.querySelector('.label').textContent = 'Failed Jobs';
+
+            // Render results by date
+            const container = document.getElementById('pipelineContainer');
+            container.innerHTML = '';
+
+            if (results.length === 0) {
+                container.innerHTML = '<div class="loading">No results found for this date range.</div>';
+                return;
+            }
+
+            results.forEach((dayData, index) => {
+                const card = document.createElement('div');
+                card.className = 'pipeline-card';
+
+                let bodyHTML = '';
+                dayData.jobs.forEach(job => {
+                    const statusIcon = job.status === 'passed' ? '✅' : (job.failed_tests > 0 ? '❌' : '⚠️');
+                    bodyHTML += `
+                        <div class="job-item">
+                            <div class="job-title">${statusIcon} ${escapeHtml(job.job_name)} - Build #${job.build_number}</div>
+                            <div class="job-meta">
+                                Tests: ${job.passed_tests}/${job.total_tests} passed |
+                                Log: ${(job.log_size / 1024).toFixed(1)} KB |
+                                Model: ${job.model_used}
+                            </div>
+                            <div class="analysis">${escapeHtml(job.analysis_text || 'No analysis')}</div>
+                        </div>
+                    `;
+                });
+
+                card.innerHTML = `
+                    <div class="pipeline-header" onclick="togglePipeline(${index})">
+                        <div>
+                            <h3>📅 ${dayData.date}</h3>
+                            <div style="font-size: 0.85em; opacity: 0.9; margin-top: 5px;">
+                                ${dayData.passed_jobs} passed, ${dayData.failed_jobs} failed
+                            </div>
+                        </div>
+                        <div class="badge">
+                            ${dayData.total_jobs} jobs
+                        </div>
+                    </div>
+                    <div class="pipeline-body" id="pipeline-${index}">
+                        ${bodyHTML}
+                    </div>
+                `;
+
+                container.appendChild(card);
+            });
+        }
+
+        function renderNewFailures(data) {
+            // Update header
+            document.getElementById('lastUpdated').textContent =
+                `New Failures in Last ${data.days} Days`;
+
+            // Update stats
+            document.getElementById('totalPipelines').textContent = data.count;
+            document.getElementById('totalJobs').textContent = data.failures.length;
+            document.getElementById('successRate').textContent = data.days;
+            document.getElementById('lastAnalysis').textContent = '-';
+
+            // Update stat labels
+            document.querySelector('#totalPipelines').parentElement.querySelector('.label').textContent = 'New Failures';
+            document.querySelector('#totalJobs').parentElement.querySelector('.label').textContent = 'Total Jobs';
+            document.querySelector('#successRate').parentElement.querySelector('.label').textContent = 'Days Analyzed';
+
+            // Render failures
+            const container = document.getElementById('pipelineContainer');
+            container.innerHTML = '';
+
+            if (data.failures.length === 0) {
+                container.innerHTML = '<div class="loading">🎉 No new failures found!</div>';
+                return;
+            }
+
+            data.failures.forEach((failure, index) => {
+                const card = document.createElement('div');
+                card.className = 'pipeline-card';
+
+                card.innerHTML = `
+                    <div class="pipeline-header" onclick="togglePipeline(${index})">
+                        <div>
+                            <h3>❌ ${escapeHtml(failure.job_name)}</h3>
+                            <div style="font-size: 0.85em; opacity: 0.9; margin-top: 5px;">
+                                Build #${failure.build_number} | ${failure.failed_tests} failed tests
+                            </div>
+                        </div>
+                        <div class="badge">
+                            ${failure.date_key}
+                        </div>
+                    </div>
+                    <div class="pipeline-body" id="pipeline-${index}">
+                        <div class="job-item">
+                            <div class="job-meta">
+                                Tests: ${failure.passed_tests}/${failure.total_tests} passed |
+                                Analyzed: ${new Date(failure.analyzed_at).toLocaleString()}
+                            </div>
+                            <div class="analysis">${escapeHtml(failure.analysis_text || 'No analysis')}</div>
+                        </div>
+                    </div>
+                `;
+
+                container.appendChild(card);
+            });
         }
 
         async function loadDateResults() {
@@ -277,70 +647,54 @@
 
         function renderDashboard(data) {
             // Update header
-            const timestamp = new Date(data.timestamp * 1000);
             document.getElementById('lastUpdated').textContent =
-                `Last updated: ${timestamp.toLocaleString()}`;
+                `Last updated: ${data.date || 'N/A'}`;
 
-            // Calculate stats
-            const pipelines = data.pipelines || [];
-            const totalPipelines = pipelines.length;
-            const successfulPipelines = pipelines.filter(p => p.status === 'success').length;
-            const totalJobs = pipelines.reduce((sum, p) => sum + (p.job_count || 0), 0);
-            const successRate = totalPipelines > 0
-                ? Math.round((successfulPipelines / totalPipelines) * 100)
-                : 0;
+            // Update stats from database-backed data
+            document.getElementById('totalPipelines').textContent = data.total_jobs || 0;
+            document.getElementById('totalJobs').textContent = data.total_tests || 0;
+            document.getElementById('successRate').textContent = `${data.passed_jobs || 0}/${data.total_jobs || 0}`;
+            document.getElementById('lastAnalysis').textContent = data.failed_jobs || 0;
 
-            // Update stats
-            document.getElementById('totalPipelines').textContent = totalPipelines;
-            document.getElementById('totalJobs').textContent = totalJobs;
-            document.getElementById('successRate').textContent = successRate + '%';
-            document.getElementById('lastAnalysis').textContent = data.date;
-
-            // Render pipelines
+            // Render analyses
             const container = document.getElementById('pipelineContainer');
             container.innerHTML = '';
 
-            if (pipelines.length === 0) {
-                container.innerHTML = '<div class="loading">No pipelines analyzed yet.</div>';
+            const analyses = data.analyses || [];
+            if (analyses.length === 0) {
+                container.innerHTML = '<div class="loading">No analyses available yet. Run daily analysis first.</div>';
                 return;
             }
 
-            pipelines.forEach((pipeline, index) => {
+            analyses.forEach((analysis, index) => {
                 const card = document.createElement('div');
                 card.className = 'pipeline-card';
 
-                const statusClass = pipeline.status === 'success' ? 'status-success' : 'status-error';
-                const statusIcon = pipeline.status === 'success' ? '✅' : '❌';
+                const statusIcon = analysis.status === 'passed' ? '✅' : (analysis.failed_tests > 0 ? '❌' : '⚠️');
 
-                let bodyHTML = '';
-
-                if (pipeline.status === 'success' && pipeline.jobs) {
-                    pipeline.jobs.forEach(job => {
-                        bodyHTML += `
-                            <div class="job-item">
-                                <div class="job-title">📦 ${job.job} - Build #${job.build}</div>
-                                <div class="job-meta">
-                                    Log size: ${(job.log_size / 1024).toFixed(1)} KB |
-                                    Analyzed: ${new Date(job.timestamp * 1000).toLocaleTimeString()}
-                                </div>
-                                <div class="analysis">${escapeHtml(job.analysis)}</div>
-                            </div>
-                        `;
-                    });
-                } else if (pipeline.error) {
-                    bodyHTML = `<div class="error-message">${escapeHtml(pipeline.error)}</div>`;
-                }
+                const bodyHTML = `
+                    <div class="job-item">
+                        <div class="job-title">${statusIcon} ${escapeHtml(analysis.job_name)} - Build #${analysis.build_number}</div>
+                        <div class="job-meta">
+                            Tests: ${analysis.passed_tests}/${analysis.total_tests} passed |
+                            Log: ${(analysis.log_size / 1024).toFixed(1)} KB |
+                            Type: ${analysis.log_type} |
+                            Model: ${analysis.model_used}
+                        </div>
+                        <div class="analysis">${escapeHtml(analysis.analysis_text || 'No analysis available')}</div>
+                    </div>
+                `;
 
                 card.innerHTML = `
                     <div class="pipeline-header" onclick="togglePipeline(${index})">
                         <div>
-                            <h3>${statusIcon} ${escapeHtml(pipeline.name)}</h3>
+                            <h3>${statusIcon} ${escapeHtml(analysis.job_name)}</h3>
                             <div style="font-size: 0.85em; opacity: 0.9; margin-top: 5px;">
-                                ${pipeline.jenkins_url || ''}
+                                ${analysis.jenkins_url || ''} | ${new Date(analysis.analyzed_at).toLocaleString()}
                             </div>
                         </div>
                         <div class="badge">
-                            ${pipeline.job_count || 0} jobs
+                            Build #${analysis.build_number}
                         </div>
                     </div>
                     <div class="pipeline-body" id="pipeline-${index}">
@@ -378,6 +732,45 @@
             div.textContent = text;
             return div.innerHTML;
         }
+
+        // Theme toggle functionality
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+
+            // Update toggle button
+            const icon = document.getElementById('themeIcon');
+            const text = document.getElementById('themeText');
+
+            if (newTheme === 'dark') {
+                icon.textContent = '🌙';
+                text.textContent = 'Light Mode';
+            } else {
+                icon.textContent = '☀️';
+                text.textContent = 'Dark Mode';
+            }
+        }
+
+        // Initialize theme on page load
+        (function() {
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+
+            const icon = document.getElementById('themeIcon');
+            const text = document.getElementById('themeText');
+
+            if (savedTheme === 'dark') {
+                icon.textContent = '🌙';
+                text.textContent = 'Light Mode';
+            } else {
+                icon.textContent = '☀️';
+                text.textContent = 'Dark Mode';
+            }
+        })();
 
         // Auto-refresh every 5 minutes
         setInterval(refreshDashboard, 5 * 60 * 1000);

@@ -5,7 +5,7 @@ GitHub: https://github.com/ScienceArtist
 Description: AI-powered Jenkins log analyzer with real-time streaming results.
 """
 
-from flask import Flask, render_template, request, jsonify, Response, stream_with_context
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context, session, redirect, url_for
 from flask_cors import CORS
 import requests
 import os
@@ -14,10 +14,13 @@ import urllib3
 import json
 import time
 import uuid
-from threading import Thread
+from threading import Thread, Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 from datetime import datetime, timedelta
+import sqlite3
+from functools import wraps
+import hashlib
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -25,6 +28,10 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
+
+# Admin password (hashed) - set via environment variable
+ADMIN_PASSWORD_HASH = os.getenv('ADMIN_PASSWORD_HASH', hashlib.sha256('admin123'.encode()).hexdigest())
 
 # In-memory storage for async analysis tasks (for automation use cases).
 # For production deployments, consider using a persistent store instead.
@@ -33,6 +40,200 @@ analysis_tasks = {}
 # In-memory storage for dashboard results (stores last 30 days)
 # Key: date (YYYY-MM-DD), Value: {pipelines: [...], timestamp: ...}
 dashboard_results = {}
+
+# Database lock for thread-safe operations
+db_lock = Lock()
+
+# Database file path
+DB_PATH = os.getenv('DB_PATH', 'jenkins_analysis.db')
+
+# ============================================================================
+# DATABASE LAYER
+# ============================================================================
+
+def init_database():
+	"""Initialize SQLite database with schema for storing analysis results"""
+	with db_lock:
+		conn = sqlite3.connect(DB_PATH)
+		cursor = conn.cursor()
+
+		# Table for storing job analysis results
+		cursor.execute('''
+			CREATE TABLE IF NOT EXISTS job_analyses (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				job_name TEXT NOT NULL,
+				build_number INTEGER NOT NULL,
+				jenkins_url TEXT NOT NULL,
+				analysis_text TEXT,
+				status TEXT,
+				log_type TEXT,
+				log_size INTEGER,
+				passed_tests INTEGER DEFAULT 0,
+				failed_tests INTEGER DEFAULT 0,
+				total_tests INTEGER DEFAULT 0,
+				model_used TEXT,
+				analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				date_key TEXT,
+				UNIQUE(job_name, build_number, jenkins_url, date_key)
+			)
+		''')
+
+		# Table for tracking daily analysis runs
+		cursor.execute('''
+			CREATE TABLE IF NOT EXISTS daily_runs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				run_date TEXT UNIQUE NOT NULL,
+				jenkins_url TEXT NOT NULL,
+				total_jobs INTEGER DEFAULT 0,
+				analyzed_jobs INTEGER DEFAULT 0,
+				passed_jobs INTEGER DEFAULT 0,
+				failed_jobs INTEGER DEFAULT 0,
+				status TEXT,
+				started_at TIMESTAMP,
+				completed_at TIMESTAMP,
+				model_used TEXT
+			)
+		''')
+
+		# Index for faster queries
+		cursor.execute('CREATE INDEX IF NOT EXISTS idx_job_date ON job_analyses(date_key, job_name)')
+		cursor.execute('CREATE INDEX IF NOT EXISTS idx_analyzed_at ON job_analyses(analyzed_at DESC)')
+		cursor.execute('CREATE INDEX IF NOT EXISTS idx_status ON job_analyses(status)')
+
+		conn.commit()
+		conn.close()
+		print("✅ Database initialized successfully")
+
+def save_job_analysis(job_name, build_number, jenkins_url, analysis_text, status,
+                      log_type='console', log_size=0, passed_tests=0, failed_tests=0,
+                      total_tests=0, model_used='', date_key=None):
+	"""Save a job analysis result to the database"""
+	if not date_key:
+		date_key = datetime.now().strftime('%Y-%m-%d')
+
+	with db_lock:
+		conn = sqlite3.connect(DB_PATH)
+		cursor = conn.cursor()
+
+		try:
+			cursor.execute('''
+				INSERT OR REPLACE INTO job_analyses
+				(job_name, build_number, jenkins_url, analysis_text, status, log_type,
+				 log_size, passed_tests, failed_tests, total_tests, model_used, date_key)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			''', (job_name, build_number, jenkins_url, analysis_text, status, log_type,
+			      log_size, passed_tests, failed_tests, total_tests, model_used, date_key))
+
+			conn.commit()
+			return True
+		except Exception as e:
+			print(f"Error saving job analysis: {e}")
+			return False
+		finally:
+			conn.close()
+
+def get_analyses_by_date_range(start_date, end_date, jenkins_url=None):
+	"""Get all analyses within a date range"""
+	with db_lock:
+		conn = sqlite3.connect(DB_PATH)
+		conn.row_factory = sqlite3.Row
+		cursor = conn.cursor()
+
+		if jenkins_url:
+			cursor.execute('''
+				SELECT * FROM job_analyses
+				WHERE date_key BETWEEN ? AND ? AND jenkins_url = ?
+				ORDER BY analyzed_at DESC
+			''', (start_date, end_date, jenkins_url))
+		else:
+			cursor.execute('''
+				SELECT * FROM job_analyses
+				WHERE date_key BETWEEN ? AND ?
+				ORDER BY analyzed_at DESC
+			''', (start_date, end_date))
+
+		rows = cursor.fetchall()
+		conn.close()
+
+		return [dict(row) for row in rows]
+
+def get_new_failures_since(days_ago, jenkins_url=None):
+	"""Get jobs that failed in the last N days but were passing before"""
+	cutoff_date = (datetime.now() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
+
+	with db_lock:
+		conn = sqlite3.connect(DB_PATH)
+		conn.row_factory = sqlite3.Row
+		cursor = conn.cursor()
+
+		# Get recent failures
+		if jenkins_url:
+			cursor.execute('''
+				SELECT DISTINCT job_name, MAX(analyzed_at) as last_analyzed
+				FROM job_analyses
+				WHERE date_key >= ? AND status IN ('success', 'failure')
+				      AND failed_tests > 0 AND jenkins_url = ?
+				GROUP BY job_name
+			''', (cutoff_date, jenkins_url))
+		else:
+			cursor.execute('''
+				SELECT DISTINCT job_name, MAX(analyzed_at) as last_analyzed
+				FROM job_analyses
+				WHERE date_key >= ? AND status IN ('success', 'failure')
+				      AND failed_tests > 0
+				GROUP BY job_name
+			''', (cutoff_date,))
+
+		rows = cursor.fetchall()
+		conn.close()
+
+		return [dict(row) for row in rows]
+
+def get_latest_analyses(limit=50, jenkins_url=None):
+	"""Get the most recent analyses"""
+	with db_lock:
+		conn = sqlite3.connect(DB_PATH)
+		conn.row_factory = sqlite3.Row
+		cursor = conn.cursor()
+
+		if jenkins_url:
+			cursor.execute('''
+				SELECT * FROM job_analyses
+				WHERE jenkins_url = ?
+				ORDER BY analyzed_at DESC
+				LIMIT ?
+			''', (jenkins_url, limit))
+		else:
+			cursor.execute('''
+				SELECT * FROM job_analyses
+				ORDER BY analyzed_at DESC
+				LIMIT ?
+			''', (limit,))
+
+		rows = cursor.fetchall()
+		conn.close()
+
+		return [dict(row) for row in rows]
+
+# Initialize database on startup
+init_database()
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+def login_required(f):
+	"""Decorator to require login for admin routes"""
+	@wraps(f)
+	def decorated_function(*args, **kwargs):
+		if not session.get('logged_in'):
+			return redirect(url_for('admin_index'))
+		return f(*args, **kwargs)
+	return decorated_function
+
+# ============================================================================
+# JENKINS ANALYZER CLASS
+# ============================================================================
 
 class JenkinsAnalyzer:
     def __init__(self, jenkins_url):
@@ -712,18 +913,52 @@ Provide (BE HONEST - say "unclear" or "not visible in this section" if uncertain
                 'status': 'error'
             }
 
+@app.route('/logout')
+def logout():
+	"""Logout"""
+	session.pop('logged_in', None)
+	return redirect(url_for('index'))
+
+@app.route('/admin', methods=['GET', 'POST'])
+def admin_index():
+	"""Admin login page - accessible directly at /admin"""
+	if request.method == 'POST':
+		password = request.form.get('password', '')
+		password_hash = hashlib.sha256(password.encode()).hexdigest()
+
+		if password_hash == ADMIN_PASSWORD_HASH:
+			session['logged_in'] = True
+			return redirect(url_for('admin_panel'))
+		else:
+			return render_template('login.html', error='Invalid password', show_back=False)
+
+	# If already logged in, redirect to admin panel
+	if session.get('logged_in'):
+		return redirect(url_for('admin_panel'))
+
+	# Show login form
+	return render_template('login.html', show_back=False)
+
+@app.route('/admin/panel')
+@login_required
+def admin_panel():
+	"""Admin panel with API key management (password protected)"""
+	return render_template('admin.html')
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+	"""Main user analyzer page where users can input their own credentials"""
+	return render_template('index.html')
 
 @app.route('/dashboard')
 def dashboard():
-    return render_template('dashboard.html')
+	"""Enhanced dashboard with database-backed results"""
+	return render_template('dashboard.html')
 
 @app.route('/jira-guide')
 def jira_guide():
-    """Interactive step-by-step guide for Jira dashboard integration"""
-    return render_template('jira-guide.html')
+	"""Interactive step-by-step guide for Jira dashboard integration"""
+	return render_template('jira-guide.html')
 
 @app.route('/api/models', methods=['POST'])
 def fetch_models():
@@ -1137,8 +1372,7 @@ def jira_formatted_results(tracking_id):
 	                "type": "link",
 	                "attrs": {"href": request.host_url.rstrip('/')}
 	            }]
-	        },
-	        {"type": "text", "text": " powered by Groq AI"}
+	        }
 	    ]
 	})
 
@@ -1473,7 +1707,7 @@ def build_jira_adf_comment(analysis_results):
 	adf_content.append({
 	    "type": "paragraph",
 	    "content": [
-	        {"type": "text", "text": "Analyzed by Jenkins Log Analyzer powered by Groq AI", "marks": [{"type": "em"}]}
+	        {"type": "text", "text": "Analyzed by Jenkins Log Analyzer", "marks": [{"type": "em"}]}
 	    ]
 	})
 
@@ -1621,7 +1855,7 @@ def build_jira_adf_comment_with_search(analysis_results, jira_url, jira_pat):
 	adf_content.append({
 	    "type": "paragraph",
 	    "content": [
-	        {"type": "text", "text": "Analyzed by Jenkins Log Analyzer powered by Groq AI", "marks": [{"type": "em"}]}
+	        {"type": "text", "text": "Analyzed by Jenkins Log Analyzer", "marks": [{"type": "em"}]}
 	    ]
 	})
 
@@ -1745,7 +1979,7 @@ def post_to_jira():
 
 			# Footer with attribution
 			comment_lines.append("----")
-			comment_lines.append("_Analyzed by Jenkins Log Analyzer powered by Groq AI_")
+			comment_lines.append("_Analyzed by Jenkins Log Analyzer_")
 
 			# Join all lines into a single comment body
 			comment_body = "\n".join(comment_lines)
@@ -2028,12 +2262,288 @@ def get_dashboard_results():
 
 @app.route('/api/dashboard/latest', methods=['GET'])
 def get_latest_dashboard():
-	"""Get the most recent dashboard results."""
-	if not dashboard_results:
-		return jsonify({'error': 'No results available'}), 404
+	"""Get the most recent dashboard results from database"""
+	try:
+		analyses = get_latest_analyses(limit=100)
 
-	latest = max(dashboard_results.values(), key=lambda x: x.get('timestamp', 0))
-	return jsonify(latest)
+		if not analyses:
+			return jsonify({'error': 'No results available'}), 404
+
+		# Group by date
+		by_date = {}
+		for analysis in analyses:
+			date_key = analysis['date_key']
+			if date_key not in by_date:
+				by_date[date_key] = []
+			by_date[date_key].append(analysis)
+
+		# Get most recent date
+		latest_date = max(by_date.keys())
+		latest_analyses = by_date[latest_date]
+
+		# Calculate stats
+		total_jobs = len(latest_analyses)
+		passed_jobs = sum(1 for a in latest_analyses if a['status'] == 'passed')
+		failed_jobs = sum(1 for a in latest_analyses if a['failed_tests'] > 0)
+		total_tests = sum(a['total_tests'] for a in latest_analyses)
+		total_passed_tests = sum(a['passed_tests'] for a in latest_analyses)
+
+		return jsonify({
+			'date': latest_date,
+			'total_jobs': total_jobs,
+			'passed_jobs': passed_jobs,
+			'failed_jobs': failed_jobs,
+			'total_tests': total_tests,
+			'passed_tests': total_passed_tests,
+			'analyses': latest_analyses,
+			'timestamp': latest_analyses[0]['analyzed_at'] if latest_analyses else None
+		})
+
+	except Exception as e:
+		return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/date-range', methods=['GET'])
+def get_dashboard_date_range():
+	"""Get analyses for a specific date range"""
+	start_date = request.args.get('start_date')
+	end_date = request.args.get('end_date')
+	jenkins_url = request.args.get('jenkins_url')
+
+	if not start_date or not end_date:
+		return jsonify({'error': 'start_date and end_date required'}), 400
+
+	try:
+		analyses = get_analyses_by_date_range(start_date, end_date, jenkins_url)
+
+		# Group by date
+		by_date = {}
+		for analysis in analyses:
+			date_key = analysis['date_key']
+			if date_key not in by_date:
+				by_date[date_key] = {
+					'date': date_key,
+					'jobs': [],
+					'total_jobs': 0,
+					'passed_jobs': 0,
+					'failed_jobs': 0
+				}
+
+			by_date[date_key]['jobs'].append(analysis)
+			by_date[date_key]['total_jobs'] += 1
+			if analysis['status'] == 'passed':
+				by_date[date_key]['passed_jobs'] += 1
+			elif analysis['failed_tests'] > 0:
+				by_date[date_key]['failed_jobs'] += 1
+
+		return jsonify({
+			'start_date': start_date,
+			'end_date': end_date,
+			'results': list(by_date.values())
+		})
+
+	except Exception as e:
+		return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/new-failures', methods=['GET'])
+def get_new_failures():
+	"""Get new failures in the last N days"""
+	days = int(request.args.get('days', 7))
+	jenkins_url = request.args.get('jenkins_url')
+
+	try:
+		failures = get_new_failures_since(days, jenkins_url)
+
+		# Get detailed info for each failure
+		detailed_failures = []
+		for failure in failures:
+			job_name = failure['job_name']
+
+			# Get latest analysis for this job
+			with db_lock:
+				conn = sqlite3.connect(DB_PATH)
+				conn.row_factory = sqlite3.Row
+				cursor = conn.cursor()
+
+				cursor.execute('''
+					SELECT * FROM job_analyses
+					WHERE job_name = ?
+					ORDER BY analyzed_at DESC
+					LIMIT 1
+				''', (job_name,))
+
+				row = cursor.fetchone()
+				conn.close()
+
+				if row:
+					detailed_failures.append(dict(row))
+
+		return jsonify({
+			'days': days,
+			'count': len(detailed_failures),
+			'failures': detailed_failures
+		})
+
+	except Exception as e:
+		return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/run-daily-analysis', methods=['POST'])
+def run_daily_analysis():
+	"""
+	Trigger daily automated analysis for all jobs.
+	This endpoint should be called by a cron job daily.
+	Uses server-side credentials from environment variables.
+	"""
+	data = request.json or {}
+
+	# Get credentials from environment (server-side)
+	groq_api_key = os.getenv('GROQ_API_KEY')
+	jenkins_url = os.getenv('JENKINS_URL')
+	model = data.get('model', os.getenv('DEFAULT_MODEL', 'llama-3.3-70b-versatile'))
+
+	if not groq_api_key or not jenkins_url:
+		return jsonify({
+			'error': 'Server not configured. Set GROQ_API_KEY and JENKINS_URL environment variables.'
+		}), 500
+
+	# Start analysis in background thread
+	task_id = str(uuid.uuid4())
+	analysis_tasks[task_id] = {
+		'status': 'running',
+		'started_at': time.time(),
+		'type': 'daily_analysis'
+	}
+
+	def run_analysis():
+		"""Background task for daily analysis"""
+		date_key = datetime.now().strftime('%Y-%m-%d')
+
+		try:
+			analyzer = JenkinsAnalyzer(jenkins_url)
+
+			# Get all jobs (not just failed ones for daily analysis)
+			jobs = analyzer.get_jobs(filter_failed=False)
+
+			total_jobs = len(jobs)
+			analyzed_count = 0
+			passed_count = 0
+			failed_count = 0
+
+			print(f"🚀 Starting daily analysis for {total_jobs} jobs...")
+
+			for job in jobs:
+				job_name = job.get('name')
+				if not job_name:
+					continue
+
+				try:
+					# Analyze job
+					result = analyzer.analyze_job_parallel(
+						job_name, model, groq_api_key,
+						rca_mode=True, enable_fallback=True
+					)
+
+					# Check for rate limit
+					if 'RATE_LIMIT_STOP' in result.get('analysis', ''):
+						# Extract wait time and pause
+						analysis_text = result.get('analysis', '')
+						if '|||' in analysis_text:
+							parts = analysis_text.split('|||')
+							if len(parts) >= 2:
+								wait_info = parts[1]
+								print(f"⏸️  Rate limit hit. {wait_info}. Pausing...")
+
+								# Extract seconds from wait info (e.g., "Reset in 5m 30s")
+								import re
+								time_match = re.search(r'(\d+)m\s*(\d+)s|(\d+)s', wait_info)
+								if time_match:
+									if time_match.group(1):
+										wait_seconds = int(time_match.group(1)) * 60 + int(time_match.group(2))
+									else:
+										wait_seconds = int(time_match.group(3))
+
+									print(f"⏳ Waiting {wait_seconds} seconds for rate limit reset...")
+									time.sleep(wait_seconds + 5)  # Add 5 seconds buffer
+									print(f"✅ Resuming analysis...")
+
+									# Retry this job
+									result = analyzer.analyze_job_parallel(
+										job_name, model, groq_api_key,
+										rca_mode=True, enable_fallback=True
+									)
+
+					# Save to database
+					save_job_analysis(
+						job_name=job_name,
+						build_number=result.get('build', 0),
+						jenkins_url=jenkins_url,
+						analysis_text=result.get('analysis', ''),
+						status=result.get('status', 'success'),
+						log_type=result.get('log_type', 'console'),
+						log_size=result.get('log_size', 0),
+						passed_tests=result.get('passed_tests', 0),
+						failed_tests=result.get('failed_tests', 0),
+						total_tests=result.get('total_tests', 0),
+						model_used=model,
+						date_key=date_key
+					)
+
+					analyzed_count += 1
+					if result.get('status') == 'passed':
+						passed_count += 1
+					elif result.get('failed_tests', 0) > 0:
+						failed_count += 1
+
+					print(f"✅ [{analyzed_count}/{total_jobs}] {job_name} - {result.get('status')}")
+
+					# Small delay between jobs
+					time.sleep(1)
+
+				except Exception as e:
+					print(f"❌ Error analyzing {job_name}: {e}")
+					continue
+
+			# Update task status
+			analysis_tasks[task_id]['status'] = 'complete'
+			analysis_tasks[task_id]['completed_at'] = time.time()
+			analysis_tasks[task_id]['results'] = {
+				'total_jobs': total_jobs,
+				'analyzed': analyzed_count,
+				'passed': passed_count,
+				'failed': failed_count,
+				'date': date_key
+			}
+
+			print(f"🎉 Daily analysis complete! {analyzed_count}/{total_jobs} jobs analyzed")
+
+		except Exception as e:
+			analysis_tasks[task_id]['status'] = 'error'
+			analysis_tasks[task_id]['error'] = str(e)
+			print(f"❌ Daily analysis failed: {e}")
+
+	# Start background thread
+	thread = Thread(target=run_analysis)
+	thread.daemon = True
+	thread.start()
+
+	return jsonify({
+		'task_id': task_id,
+		'status': 'started',
+		'message': 'Daily analysis started in background'
+	})
+
+
+@app.route('/api/daily-analysis-status/<task_id>', methods=['GET'])
+def get_daily_analysis_status(task_id):
+	"""Get status of a daily analysis task"""
+	task = analysis_tasks.get(task_id)
+
+	if not task:
+		return jsonify({'error': 'Task not found'}), 404
+
+	return jsonify(task)
 
 
 if __name__ == '__main__':
