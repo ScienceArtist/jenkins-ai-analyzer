@@ -2576,8 +2576,13 @@ Current Dashboard Summary:
 - Failed: {failed_jobs}
 - Unstable: {unstable_jobs}{failed_jobs_text}{unstable_jobs_text}{passed_jobs_text}
 
+IMPORTANT: Be EXTREMELY ACCURATE with numbers and facts. Always use the exact numbers from the dashboard summary above.
+- "Unstable" jobs are jobs that passed but have test failures
+- "Failed" jobs are jobs that failed completely
+- "Passed" jobs are jobs that passed with no test failures
+
 Answer questions concisely and helpfully. Focus on:
-1. Explaining build statuses and test results
+1. Explaining build statuses and test results accurately
 2. Helping users understand failure patterns
 3. Suggesting next steps for investigation
 4. Clarifying dashboard features
@@ -2598,7 +2603,7 @@ Keep answers brief (2-3 sentences max) unless asked for details or lists.'''
 				{'role': 'system', 'content': system_prompt},
 				{'role': 'user', 'content': user_prompt}
 			],
-			'temperature': 0.7,
+			'temperature': 0.1,  # Low temperature for factual accuracy
 			'max_tokens': 300
 		}
 

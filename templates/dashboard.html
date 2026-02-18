@@ -1494,7 +1494,7 @@
                     total_jobs: parseInt(document.getElementById('totalJobs')?.textContent || '0'),
                     passed_jobs: parseInt(document.getElementById('passedJobs')?.textContent || '0'),
                     failed_jobs: parseInt(document.getElementById('failedJobs')?.textContent || '0'),
-                    unstable_jobs: unstableJobs.length,
+                    unstable_jobs: parseInt(document.getElementById('unstableJobs')?.textContent || '0'),
                     date: document.getElementById('lastUpdated')?.textContent || 'unknown',
                     failed_job_list: failedJobs.slice(0, 10), // Limit to 10 to avoid token limits
                     unstable_job_list: unstableJobs.slice(0, 10),
