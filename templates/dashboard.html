@@ -528,6 +528,10 @@
                 <div class="label">Failed Jobs</div>
                 <div class="value" id="failedJobs" style="color: #ef4444;">-</div>
             </div>
+            <div class="stat-card">
+                <div class="label">Unstable Jobs</div>
+                <div class="value" id="unstableJobs" style="color: #f59e0b;">-</div>
+            </div>
         </div>
 
         <div id="pipelineContainer" class="pipeline-grid">
@@ -824,12 +828,15 @@
             const totalJobs = results.reduce((sum, day) => sum + day.total_jobs, 0);
             const totalPassed = results.reduce((sum, day) => sum + day.passed_jobs, 0);
             const totalFailed = results.reduce((sum, day) => sum + day.failed_jobs, 0);
+            const totalUnstable = totalJobs - totalPassed - totalFailed;
 
             // Update stats
             document.getElementById('totalPipelines').textContent = totalDays;
             document.getElementById('totalJobs').textContent = totalJobs;
             document.getElementById('passedJobs').textContent = totalPassed;
             document.getElementById('failedJobs').textContent = totalFailed;
+            const unstableEl = document.getElementById('unstableJobs');
+            if (unstableEl) unstableEl.textContent = totalUnstable;
 
             // Render results by date
             const container = document.getElementById('pipelineContainer');
@@ -852,7 +859,8 @@
                 // Date header
                 const dateHeader = document.createElement('h2');
                 dateHeader.style.cssText = 'color: var(--text-primary); margin: 20px 0 15px 0;';
-                dateHeader.textContent = `📅 ${dayData.date} (${dayData.total_jobs} jobs | ${dayData.passed_jobs} passed | ${dayData.failed_jobs} failed)`;
+                const unstableCount = dayData.total_jobs - dayData.passed_jobs - dayData.failed_jobs;
+                dateHeader.textContent = `📅 ${dayData.date} (${dayData.total_jobs} jobs | ${dayData.passed_jobs} passed | ${dayData.failed_jobs} failed | ${unstableCount} unstable)`;
                 container.appendChild(dateHeader);
 
                 // Separate jobs by status
@@ -1106,8 +1114,10 @@
 
             const passedEl = document.getElementById('passedJobs');
             const failedEl = document.getElementById('failedJobs');
+            const unstableEl = document.getElementById('unstableJobs');
             if (passedEl) passedEl.textContent = '0';
             if (failedEl) failedEl.textContent = data.failures.length;
+            if (unstableEl) unstableEl.textContent = '0';
 
             // Update stat labels
             const labels = document.querySelectorAll('.stat-card .label');
@@ -1115,6 +1125,7 @@
             if (labels[1]) labels[1].textContent = 'Total Jobs';
             if (labels[2]) labels[2].textContent = 'Passed Jobs';
             if (labels[3]) labels[3].textContent = 'Failed Jobs';
+            if (labels[4]) labels[4].textContent = 'Unstable Jobs';
 
             // Render failures
             const container = document.getElementById('pipelineContainer');
@@ -1211,14 +1222,19 @@
             const passedJobs = data.passed_jobs || 0;
             const failedJobs = data.failed_jobs || 0;
 
+            // Calculate unstable jobs (total - passed - failed)
+            const unstableJobs = totalJobs - passedJobs - failedJobs;
+
             document.getElementById('totalPipelines').textContent = '1';
             document.getElementById('totalJobs').textContent = totalJobs;
 
-            // Update passedJobs and failedJobs if they exist
+            // Update passedJobs, failedJobs, and unstableJobs if they exist
             const passedEl = document.getElementById('passedJobs');
             const failedEl = document.getElementById('failedJobs');
+            const unstableEl = document.getElementById('unstableJobs');
             if (passedEl) passedEl.textContent = passedJobs;
             if (failedEl) failedEl.textContent = failedJobs;
+            if (unstableEl) unstableEl.textContent = unstableJobs;
 
             // Fallback for old stat elements
             const successRateEl = document.getElementById('successRate');
