@@ -2541,6 +2541,30 @@ def dashboard_chat():
 		unstable_jobs = dashboard_data.get('unstable_jobs', 0)
 		date = dashboard_data.get('date', 'unknown')
 
+		# Get detailed job lists
+		failed_job_list = dashboard_data.get('failed_job_list', [])
+		unstable_job_list = dashboard_data.get('unstable_job_list', [])
+		passed_job_list = dashboard_data.get('passed_job_list', [])
+
+		# Format job lists for context
+		failed_jobs_text = ""
+		if failed_job_list:
+			failed_jobs_text = "\n\nFailed Jobs:\n" + "\n".join([
+				f"- {job['name']} #{job['build']} ({job['failed_tests']}/{job['total_tests']} tests failed)"
+				for job in failed_job_list
+			])
+
+		unstable_jobs_text = ""
+		if unstable_job_list:
+			unstable_jobs_text = "\n\nUnstable Jobs:\n" + "\n".join([
+				f"- {job['name']} #{job['build']}"
+				for job in unstable_job_list
+			])
+
+		passed_jobs_text = ""
+		if passed_job_list and len(passed_job_list) > 0:
+			passed_jobs_text = f"\n\nSome Passed Jobs: {', '.join([job['name'] for job in passed_job_list[:3]])}"
+
 		system_prompt = f'''You are a helpful AI assistant for the Jenkins Analysis Dashboard.
 You help users understand their test results and build status.
 
@@ -2549,15 +2573,16 @@ Current Dashboard Summary:
 - Total Jobs: {total_jobs}
 - Passed: {passed_jobs}
 - Failed: {failed_jobs}
-- Unstable: {unstable_jobs}
+- Unstable: {unstable_jobs}{failed_jobs_text}{unstable_jobs_text}{passed_jobs_text}
 
 Answer questions concisely and helpfully. Focus on:
 1. Explaining build statuses and test results
 2. Helping users understand failure patterns
 3. Suggesting next steps for investigation
 4. Clarifying dashboard features
+5. Providing specific job names when asked about failures or unstable builds
 
-Keep answers brief (2-3 sentences max) unless asked for details.'''
+Keep answers brief (2-3 sentences max) unless asked for details or lists.'''
 
 		user_prompt = f"User question: {user_question}"
 

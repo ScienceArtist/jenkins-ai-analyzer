@@ -1412,13 +1412,40 @@
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
             try {
-                // Prepare dashboard context
+                // Prepare dashboard context with detailed job information
+                const failedJobs = [];
+                const unstableJobs = [];
+                const passedJobs = [];
+
+                // Extract job details from currentData
+                if (currentData && currentData.jobs) {
+                    currentData.jobs.forEach(job => {
+                        const jobInfo = {
+                            name: job.job_name,
+                            build: job.build_number,
+                            failed_tests: job.failed_tests || 0,
+                            total_tests: job.total_tests || 0
+                        };
+
+                        if (job.status === 'failed' || job.failed_tests > 0) {
+                            failedJobs.push(jobInfo);
+                        } else if (job.status === 'unstable') {
+                            unstableJobs.push(jobInfo);
+                        } else if (job.status === 'passed' || job.status === 'success') {
+                            passedJobs.push(jobInfo);
+                        }
+                    });
+                }
+
                 const dashboardData = {
                     total_jobs: parseInt(document.getElementById('totalJobs')?.textContent || '0'),
                     passed_jobs: parseInt(document.getElementById('passedJobs')?.textContent || '0'),
                     failed_jobs: parseInt(document.getElementById('failedJobs')?.textContent || '0'),
-                    unstable_jobs: 0, // Calculate if needed
-                    date: document.getElementById('lastUpdated')?.textContent || 'unknown'
+                    unstable_jobs: unstableJobs.length,
+                    date: document.getElementById('lastUpdated')?.textContent || 'unknown',
+                    failed_job_list: failedJobs.slice(0, 10), // Limit to 10 to avoid token limits
+                    unstable_job_list: unstableJobs.slice(0, 10),
+                    passed_job_list: passedJobs.slice(0, 5) // Just a few examples
                 };
 
                 const response = await fetch('/api/dashboard-chat', {
